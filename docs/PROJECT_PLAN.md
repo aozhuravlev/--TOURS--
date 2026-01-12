@@ -16,8 +16,8 @@
 ```mermaid
 flowchart TB
     subgraph Scheduler["SCHEDULER (CRON)"]
-        S1[Evening 20:00-21:00<br/>Generate content]
-        S2[Morning 08:00-09:00<br/>Publish approved]
+        S1[Morning 08:00-09:00<br/>Generate content for tomorrow]
+        S2[Next morning 08:00-09:00<br/>Publish approved]
     end
 
     subgraph Orchestrator["ORCHESTRATOR"]
@@ -58,7 +58,7 @@ flowchart TB
 
 ```mermaid
 sequenceDiagram
-    participant CronEve as Scheduler<br/>20:00-21:00 MSK
+    participant CronGen as Scheduler<br/>День 1: 08:00-09:00 MSK
     participant Orch as Orchestrator
     participant History as Content History
     participant Topics as Topic Selector
@@ -68,12 +68,12 @@ sequenceDiagram
     participant Video as Video Composer
     participant TG as Telegram Bot
     participant Mod as Модератор
-    participant CronMorn as Scheduler<br/>08:00-09:00 MSK
+    participant CronPub as Scheduler<br/>День 2: 08:00-09:00 MSK
     participant IG as Instagram API
 
-    Note over CronEve,Video: ВЕЧЕР: Генерация контента
+    Note over CronGen,Video: ДЕНЬ 1 УТРО: Генерация контента
 
-    CronEve->>Orch: Trigger generation
+    CronGen->>Orch: Trigger generation
     Orch->>History: Get unused topics/media
     History-->>Orch: Available options
 
@@ -98,7 +98,7 @@ sequenceDiagram
     Orch->>History: Mark content as pending
     Orch->>TG: Send content for review
 
-    Note over TG,Mod: МОДЕРАЦИЯ
+    Note over TG,Mod: ~24 ЧАСА НА МОДЕРАЦИЮ
 
     TG->>Mod: Видео + текст на проверку
 
@@ -109,9 +109,9 @@ sequenceDiagram
         Note over TG: Автоматическое одобрение
     end
 
-    Note over CronMorn,IG: УТРО: Публикация
+    Note over CronPub,IG: ДЕНЬ 2 УТРО: Публикация
 
-    CronMorn->>Orch: Trigger publish
+    CronPub->>Orch: Trigger publish
     Orch->>IG: Publish story/post
     IG-->>Orch: Success
     Orch->>History: Mark as published
@@ -383,10 +383,10 @@ tours-batumi-bot/
 - Автоматическое одобрение через 24 часа без действий
 
 **Workflow:**
-1. Вечером (20:00-21:00) система генерирует контент
+1. **День 1, утро (08:00-09:00):** система генерирует контент на завтра
 2. Контент отправляется модератору в Telegram
-3. Модератор редактирует или одобряет
-4. Утром (08:00-09:00) публикуется одобренный контент
+3. **~24 часа:** модератор редактирует или одобряет
+4. **День 2, утро (08:00-09:00):** публикуется одобренный контент
 
 ### 5.5. Защита от повторов: CONTENT HISTORY
 
@@ -620,8 +620,9 @@ gantt
 | Вопрос | Решение |
 |--------|---------|
 | **Модерация** | Telegram-бот: редактирование текста + одобрение |
-| **Время генерации** | 20:00-21:00 MSK (вечером накануне) |
-| **Время публикации** | 08:00-09:00 MSK (рандомно в этом диапазоне) |
+| **Время генерации** | 08:00-09:00 MSK (утром, контент на завтра) |
+| **Время публикации** | 08:00-09:00 MSK следующего дня |
+| **Окно модерации** | ~24 часа между генерацией и публикацией |
 | **Fallback при отсутствии модерации** | Автопубликация через 24 часа без изменений |
 | **Формат Stories** | Видео (фото + музыка через FFmpeg), текст как caption |
 | **Защита от повторов** | content_history.json, подтема не повторяется 7 дней |
@@ -643,5 +644,5 @@ gantt
 ---
 
 *Документ создан: 2026-01-12*
-*Версия: 1.2*
-*Обновлено: 2026-01-12 — добавлены Video Composer, Telegram Bot, Content History, обновлён workflow*
+*Версия: 1.3*
+*Обновлено: 2026-01-12 — workflow: генерация утром → 24ч модерация → публикация на следующее утро*
