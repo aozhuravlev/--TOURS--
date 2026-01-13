@@ -1,3 +1,40 @@
+# Claude Code
 .claude
+
+# Environment
 .env
+
+# Media files (large, managed separately)
 media/
+
+# Generated output
+output/
+
+# Data files
+data/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
