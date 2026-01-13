@@ -92,6 +92,18 @@ class MediaUploader:
                 logger.error(f"SCP failed: {result.stderr}")
                 return None
 
+            # Set permissions for nginx to read
+            chmod_cmd = [
+                "ssh",
+                "-i", str(self.config.ssh_key_path),
+                "-p", str(self.config.ssh_port),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "BatchMode=yes",
+                f"{self.config.ssh_user}@{self.config.ssh_host}",
+                f"chmod 644 {remote_file}",
+            ]
+            subprocess.run(chmod_cmd, capture_output=True, timeout=10)
+
             # Return public URL
             public_url = f"{self.config.public_base_url}/{remote_filename}"
             logger.info(f"Uploaded {local_path.name} -> {public_url}")
