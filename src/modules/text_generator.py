@@ -6,11 +6,13 @@ Uses two-step process: generation -> humanization.
 Prompts are loaded from external .txt files for easy editing.
 """
 
+import json
 import logging
+import random
 import time
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -29,6 +31,145 @@ class GeneratedText:
     subtopic: str
     success: bool
     error: Optional[str] = None
+
+
+@dataclass
+class StoryItem:
+    """Single story in a series."""
+    order: int           # 1, 2, 3...
+    angle: str           # "intro", "how_to_eat", "where"...
+    text: str            # Text for overlay
+    keywords: str        # English keywords for photo search
+
+
+@dataclass
+class GeneratedStorySeries:
+    """Result of story series generation."""
+    topic: str
+    subtopic: str
+    stories: list[StoryItem]
+    success: bool
+    error: Optional[str] = None
+
+
+def _clean_json_response(content: str) -> str:
+    """
+    Clean LLM response to extract valid JSON.
+
+    Handles:
+    - Markdown code blocks (```json ... ```)
+    - Leading/trailing whitespace
+    - Extra text before/after JSON
+    """
+    content = content.strip()
+
+    # Remove markdown code blocks
+    if "```" in content:
+        # Find JSON block
+        parts = content.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            # Try to find JSON object
+            if part.startswith("{") or part.startswith("["):
+                content = part
+                break
+
+    # If content doesn't start with { or [, try to find JSON
+    if not content.startswith("{") and not content.startswith("["):
+        start_obj = content.find("{")
+        start_arr = content.find("[")
+
+        if start_obj == -1 and start_arr == -1:
+            return content  # No JSON found, return as-is
+
+        # Use whichever comes first
+        if start_obj == -1:
+            start = start_arr
+        elif start_arr == -1:
+            start = start_obj
+        else:
+            start = min(start_obj, start_arr)
+
+        content = content[start:]
+
+    # Remove any trailing text after JSON
+    # Find matching closing bracket
+    if content.startswith("{"):
+        depth = 0
+        for i, char in enumerate(content):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    content = content[:i + 1]
+                    break
+    elif content.startswith("["):
+        depth = 0
+        for i, char in enumerate(content):
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    content = content[:i + 1]
+                    break
+
+    return content.strip()
+
+
+def _validate_story_series_json(data: dict, expected_count: int) -> tuple[bool, str]:
+    """
+    Validate story series JSON structure.
+
+    Args:
+        data: Parsed JSON data
+        expected_count: Expected number of stories
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Check root structure
+    if not isinstance(data, dict):
+        return False, "Response must be a JSON object"
+
+    if "stories" not in data:
+        return False, "Missing 'stories' key in response"
+
+    stories = data["stories"]
+    if not isinstance(stories, list):
+        return False, "'stories' must be an array"
+
+    if len(stories) == 0:
+        return False, "No stories in response"
+
+    # Validate each story
+    required_fields = ["order", "text", "keywords"]
+    for i, story in enumerate(stories):
+        if not isinstance(story, dict):
+            return False, f"Story {i + 1} must be an object"
+
+        for field in required_fields:
+            if field not in story:
+                return False, f"Story {i + 1} missing required field: {field}"
+
+        # Validate text length (max 80 chars as per prompt)
+        text = story.get("text", "")
+        if len(text) > 100:  # Allow some tolerance
+            logger.warning(f"Story {i + 1} text too long ({len(text)} chars): {text[:50]}...")
+
+        # Validate order
+        order = story.get("order")
+        if not isinstance(order, int) or order < 1:
+            return False, f"Story {i + 1} has invalid order: {order}"
+
+    # Check count (warning only, not error)
+    if len(stories) != expected_count:
+        logger.warning(f"Expected {expected_count} stories, got {len(stories)}")
+
+    return True, ""
 
 
 class TextGenerator:
@@ -145,6 +286,153 @@ class TextGenerator:
             topic=topic,
             subtopic=subtopic,
             facts=facts,
+        )
+
+    def generate_story_series(
+        self,
+        topic: str,
+        subtopic: str,
+        facts: str = "",
+        min_count: int = 3,
+        max_count: int = 7,
+    ) -> GeneratedStorySeries:
+        """
+        Generate a series of connected Instagram Stories.
+
+        Args:
+            topic: Category name (e.g., "Грузинская кухня")
+            subtopic: Specific subtopic (e.g., "Хачапури по-аджарски")
+            facts: Optional facts from Perplexity
+            min_count: Minimum number of stories (default 3)
+            max_count: Maximum number of stories (default 7)
+
+        Returns:
+            GeneratedStorySeries with list of StoryItem objects
+        """
+        # Random count between min and max
+        count = random.randint(min_count, max_count)
+        logger.info(f"Generating story series: {count} stories for '{subtopic}'")
+
+        # Load prompt
+        prompt_template = self._load_prompt("story_series_generator")
+        if not prompt_template:
+            return GeneratedStorySeries(
+                topic=topic,
+                subtopic=subtopic,
+                stories=[],
+                success=False,
+                error="Prompt template not found",
+            )
+
+        # Fill prompt
+        prompt = prompt_template.format(
+            count=count,
+            topic=topic,
+            subtopic=subtopic,
+            facts=facts or "Нет дополнительных фактов",
+        )
+
+        # Call API
+        for attempt in range(self.max_retries):
+            try:
+                response = self.client.post(
+                    DEEPSEEK_API_URL,
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "Ты - копирайтер для туристического Instagram-аккаунта tours.batumi. "
+                                           "Создаёшь серии связанных Stories, которые вместе рассказывают историю. "
+                                           "Отвечаешь ТОЛЬКО валидным JSON без markdown."
+                            },
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 2000,
+                    },
+                )
+                response.raise_for_status()
+
+                content = response.json()["choices"][0]["message"]["content"].strip()
+
+                # Clean and parse JSON response
+                cleaned_content = _clean_json_response(content)
+                logger.debug(f"Cleaned JSON: {cleaned_content[:200]}...")
+
+                data = json.loads(cleaned_content)
+
+                # Validate JSON structure
+                is_valid, validation_error = _validate_story_series_json(data, count)
+                if not is_valid:
+                    logger.warning(f"JSON validation failed: {validation_error}")
+                    raise ValueError(validation_error)
+
+                # Build StoryItem list
+                stories = []
+                for item in data.get("stories", []):
+                    stories.append(StoryItem(
+                        order=item.get("order", len(stories) + 1),
+                        angle=item.get("angle", "unknown"),
+                        text=item.get("text", "").strip(),
+                        keywords=item.get("keywords", "").strip(),
+                    ))
+
+                logger.info(f"Generated {len(stories)} stories successfully")
+
+                return GeneratedStorySeries(
+                    topic=topic,
+                    subtopic=subtopic,
+                    stories=stories,
+                    success=True,
+                )
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parse error on attempt {attempt + 1}: {e}")
+                logger.debug(f"Raw content: {content[:500] if 'content' in dir() else 'N/A'}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2)
+                continue
+
+            except ValueError as e:
+                # Validation error - retry with same logic
+                logger.warning(f"Validation error on attempt {attempt + 1}: {e}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2)
+                continue
+
+            except httpx.TimeoutException:
+                logger.warning(f"Timeout on attempt {attempt + 1}/{self.max_retries}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2 ** attempt)
+                continue
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error: {e.response.status_code} - {e.response.text[:200]}")
+                return GeneratedStorySeries(
+                    topic=topic,
+                    subtopic=subtopic,
+                    stories=[],
+                    success=False,
+                    error=f"HTTP {e.response.status_code}",
+                )
+
+            except Exception as e:
+                logger.error(f"Unexpected error generating story series: {e}")
+                return GeneratedStorySeries(
+                    topic=topic,
+                    subtopic=subtopic,
+                    stories=[],
+                    success=False,
+                    error=str(e),
+                )
+
+        return GeneratedStorySeries(
+            topic=topic,
+            subtopic=subtopic,
+            stories=[],
+            success=False,
+            error="Max retries exceeded",
         )
 
     def _generate(

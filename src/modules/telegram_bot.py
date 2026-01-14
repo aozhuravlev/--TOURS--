@@ -38,12 +38,29 @@ class ModerationAction(Enum):
 class PendingContent:
     """Content awaiting moderation."""
     content_id: str
-    content_type: str  # "story" or "post"
+    content_type: str  # "story", "post", or "story_series"
     topic: str
     subtopic: str
     text: str
     video_path: Optional[Path]
     photo_path: Path
+
+
+@dataclass
+class StorySeriesItem:
+    """Single story in a series for moderation."""
+    order: int
+    text: str
+    video_path: Path
+
+
+@dataclass
+class PendingStorySeries:
+    """Story series awaiting moderation."""
+    content_id: str
+    topic: str
+    subtopic: str
+    stories: list[StorySeriesItem]
 
 
 class ModerationBot:
@@ -78,6 +95,8 @@ class ModerationBot:
         self._editing: dict[int, str] = {}
         # Store content data: content_id -> PendingContent
         self._pending: dict[str, PendingContent] = {}
+        # Store pending series: content_id -> PendingStorySeries
+        self._pending_series: dict[str, PendingStorySeries] = {}
 
         self.app: Optional[Application] = None
 
@@ -111,15 +130,22 @@ class ModerationBot:
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
         pending_count = len(self._pending)
-        if pending_count == 0:
+        series_count = len(self._pending_series)
+
+        if pending_count == 0 and series_count == 0:
             await update.message.reply_text("Нет контента, ожидающего модерации.")
         else:
-            items = "\n".join([
-                f"• [{c.content_type}] {c.subtopic}"
-                for c in self._pending.values()
-            ])
+            items = []
+            for c in self._pending.values():
+                if c.content_type == "story_series":
+                    series = self._pending_series.get(c.content_id)
+                    story_count = len(series.stories) if series else "?"
+                    items.append(f"• [СЕРИЯ {story_count} шт] {c.subtopic}")
+                else:
+                    items.append(f"• [{c.content_type}] {c.subtopic}")
+
             await update.message.reply_text(
-                f"Ожидают модерации: {pending_count}\n\n{items}"
+                f"Ожидают модерации: {pending_count}\n\n" + "\n".join(items)
             )
 
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,21 +214,45 @@ class ModerationBot:
         """Approve content for publishing."""
         content = self._pending.get(content_id)
         if not content:
-            await query.edit_message_caption(
-                caption="⚠️ Контент не найден или уже обработан."
+            # Try to find in series (might be message-based, not caption)
+            if content_id in self._pending_series:
+                series = self._pending_series[content_id]
+                if self.on_approve:
+                    await self.on_approve(content_id, "")  # Series has no single text
+                del self._pending_series[content_id]
+                del self._pending[content_id]
+                await query.edit_message_text(
+                    text=f"✅ СЕРИЯ ОДОБРЕНА\n\n"
+                         f"{len(series.stories)} историй: {series.subtopic}"
+                )
+                return
+
+            await query.edit_message_text(
+                text="⚠️ Контент не найден или уже обработан."
             )
             return
 
         if self.on_approve:
             await self.on_approve(content_id, content.text)
 
+        # Clean up series data if present
+        if content_id in self._pending_series:
+            del self._pending_series[content_id]
         del self._pending[content_id]
 
-        await query.edit_message_caption(
-            caption=f"✅ ОДОБРЕНО\n\n"
-                    f"[{content.content_type}] {content.subtopic}\n\n"
-                    f"{content.text}"
-        )
+        # Use edit_message_text for text messages (series), edit_message_caption for media
+        if content.content_type == "story_series":
+            await query.edit_message_text(
+                text=f"✅ СЕРИЯ ОДОБРЕНА\n\n"
+                     f"[{content.content_type}] {content.subtopic}\n\n"
+                     f"{content.text[:500]}..."
+            )
+        else:
+            await query.edit_message_caption(
+                caption=f"✅ ОДОБРЕНО\n\n"
+                        f"[{content.content_type}] {content.subtopic}\n\n"
+                        f"{content.text}"
+            )
 
     async def _start_edit(self, query, content_id: str):
         """Start editing mode."""
@@ -253,20 +303,39 @@ class ModerationBot:
         """Reject content."""
         content = self._pending.get(content_id)
         if not content:
-            await query.edit_message_caption(
-                caption="⚠️ Контент не найден или уже обработан."
+            # Try series
+            if content_id in self._pending_series:
+                series = self._pending_series[content_id]
+                if self.on_reject:
+                    await self.on_reject(content_id)
+                del self._pending_series[content_id]
+                await query.edit_message_text(
+                    text=f"❌ СЕРИЯ ОТКЛОНЕНА\n\n{series.subtopic}"
+                )
+                return
+
+            await query.edit_message_text(
+                text="⚠️ Контент не найден или уже обработан."
             )
             return
 
         if self.on_reject:
             await self.on_reject(content_id)
 
+        # Clean up series data if present
+        if content_id in self._pending_series:
+            del self._pending_series[content_id]
         del self._pending[content_id]
 
-        await query.edit_message_caption(
-            caption=f"❌ ОТКЛОНЕНО\n\n"
-                    f"[{content.content_type}] {content.subtopic}"
-        )
+        if content.content_type == "story_series":
+            await query.edit_message_text(
+                text=f"❌ СЕРИЯ ОТКЛОНЕНА\n\n{content.subtopic}"
+            )
+        else:
+            await query.edit_message_caption(
+                caption=f"❌ ОТКЛОНЕНО\n\n"
+                        f"[{content.content_type}] {content.subtopic}"
+            )
 
     def _build_keyboard(self, content_id: str) -> InlineKeyboardMarkup:
         """Build inline keyboard for moderation."""
@@ -361,6 +430,113 @@ class ModerationBot:
 
         except Exception as e:
             logger.error(f"Failed to send content: {e}")
+            return False
+
+    async def send_series_for_moderation(
+        self,
+        content_id: str,
+        topic: str,
+        subtopic: str,
+        stories: list[dict],
+    ) -> bool:
+        """
+        Send story series to moderator for review.
+
+        Sends all videos as a media group, then a summary message with buttons.
+
+        Args:
+            content_id: Unique content identifier
+            topic: Category name
+            subtopic: Subtopic name
+            stories: List of dicts with 'order', 'text', 'video_path' keys
+
+        Returns:
+            True if sent successfully
+        """
+        if not self.app:
+            logger.error("Bot app not initialized. Call build_app() first.")
+            return False
+
+        # Store pending series
+        series_items = [
+            StorySeriesItem(
+                order=s.get("order", i + 1),
+                text=s["text"],
+                video_path=Path(s["video_path"]),
+            )
+            for i, s in enumerate(stories)
+        ]
+
+        self._pending_series[content_id] = PendingStorySeries(
+            content_id=content_id,
+            topic=topic,
+            subtopic=subtopic,
+            stories=series_items,
+        )
+
+        # Also store as pending content for unified handling
+        combined_text = "\n\n".join([
+            f"#{s.order}: {s.text}"
+            for s in series_items
+        ])
+
+        self._pending[content_id] = PendingContent(
+            content_id=content_id,
+            content_type="story_series",
+            topic=topic,
+            subtopic=subtopic,
+            text=combined_text,
+            video_path=series_items[0].video_path if series_items else None,
+            photo_path=None,
+        )
+
+        try:
+            bot = self.app.bot
+
+            # Send intro message
+            await bot.send_message(
+                chat_id=self.moderator_chat_id,
+                text=f"📚 СЕРИЯ STORIES для модерации\n\n"
+                     f"[{len(stories)} историй] {subtopic}\n"
+                     f"Категория: {topic}\n\n"
+                     f"Сейчас отправлю все видео..."
+            )
+
+            # Send videos individually with their texts
+            for i, story_item in enumerate(series_items):
+                if story_item.video_path.exists():
+                    caption = f"#{story_item.order}/{len(series_items)}: {story_item.text}"
+                    with open(story_item.video_path, "rb") as video_file:
+                        await bot.send_video(
+                            chat_id=self.moderator_chat_id,
+                            video=video_file,
+                            caption=caption[:1024],  # Telegram caption limit
+                        )
+                else:
+                    logger.warning(f"Video not found: {story_item.video_path}")
+
+            # Send summary with buttons
+            summary_text = (
+                f"📋 Серия готова к модерации\n\n"
+                f"Тема: {subtopic}\n"
+                f"Количество: {len(stories)} историй\n\n"
+                f"Тексты:\n" +
+                "\n".join([f"#{s.order}: {s.text}" for s in series_items])
+            )
+
+            keyboard = self._build_keyboard(content_id)
+
+            await bot.send_message(
+                chat_id=self.moderator_chat_id,
+                text=summary_text[:4096],  # Telegram message limit
+                reply_markup=keyboard,
+            )
+
+            logger.info(f"Sent story series for moderation: {content_id} ({len(stories)} stories)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send story series: {e}")
             return False
 
     def run_polling(self):

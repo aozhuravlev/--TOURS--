@@ -3,11 +3,12 @@
 tours.batumi Instagram Automation - Main Entry Point
 
 Usage:
-    python main.py                  # Run full system (scheduler + bot)
-    python main.py generate         # Generate one story now
-    python main.py generate --post  # Generate one post now
-    python main.py stats            # Show system statistics
-    python main.py test             # Run integration test
+    python main.py                      # Run full system (scheduler + bot)
+    python main.py generate             # Generate one story now
+    python main.py generate --post      # Generate one post now
+    python main.py generate --series    # Generate story series (3-7 connected stories)
+    python main.py stats                # Show system statistics
+    python main.py test                 # Run integration test
 """
 
 import sys
@@ -123,26 +124,62 @@ def cmd_generate(args):
         use_text_overlay=use_text_overlay,
     )
 
-    if args.post:
+    if args.series:
+        # Generate story series
+        result = orchestrator.generate_story_series(
+            ken_burns=not args.static,
+            min_count=getattr(args, "min_stories", 3),
+            max_count=getattr(args, "max_stories", 7),
+        )
+        if result and result.success:
+            print(f"\n{'=' * 60}")
+            print(f"Generated Story Series ({result.story_count} stories)")
+            print("=" * 60)
+            print(f"Topic: [{result.topic.category_name}] {result.topic.subtopic}")
+            print(f"\nStories:")
+            for story in result.stories:
+                print(f"\n  #{story.order} [{story.angle}]")
+                print(f"    Text: {story.text}")
+                print(f"    Video: {story.video_path.name}")
+                size = story.video_path.stat().st_size / 1024 / 1024
+                print(f"    Size: {size:.1f} MB")
+            print("=" * 60)
+        else:
+            error = result.error if result else "Unknown error"
+            print(f"Story series generation failed: {error}")
+            sys.exit(1)
+    elif args.post:
         content = orchestrator.generate_post()
         content_type = "Post"
+        if content:
+            print(f"\n{'=' * 60}")
+            print(f"Generated {content_type}")
+            print("=" * 60)
+            print(f"Topic: [{content.topic.category_name}] {content.topic.subtopic}")
+            print(f"\nCaption:\n{content.caption}")
+            if content.video_path:
+                print(f"\nVideo: {content.video_path}")
+                print(f"Size: {content.video_path.stat().st_size / 1024 / 1024:.1f} MB")
+            print("=" * 60)
+        else:
+            print("Generation failed!")
+            sys.exit(1)
     else:
         content = orchestrator.generate_story(ken_burns=not args.static)
         content_type = "Story"
-
-    if content:
-        print(f"\n{'=' * 60}")
-        print(f"Generated {content_type}")
-        print("=" * 60)
-        print(f"Topic: [{content.topic.category_name}] {content.topic.subtopic}")
-        print(f"\nCaption:\n{content.caption}")
-        if content.video_path:
-            print(f"\nVideo: {content.video_path}")
-            print(f"Size: {content.video_path.stat().st_size / 1024 / 1024:.1f} MB")
-        print("=" * 60)
-    else:
-        print("Generation failed!")
-        sys.exit(1)
+        if content:
+            print(f"\n{'=' * 60}")
+            print(f"Generated {content_type}")
+            print("=" * 60)
+            print(f"Topic: [{content.topic.category_name}] {content.topic.subtopic}")
+            print(f"\nCaption:\n{content.caption}")
+            if content.video_path:
+                print(f"\nVideo: {content.video_path}")
+                print(f"Size: {content.video_path.stat().st_size / 1024 / 1024:.1f} MB")
+            print("=" * 60)
+        else:
+            print("Generation failed!")
+            sys.exit(1)
 
     orchestrator.close()
 
@@ -279,6 +316,9 @@ def main():
     # generate command
     gen_parser = subparsers.add_parser("generate", help="Generate content now")
     gen_parser.add_argument("--post", action="store_true", help="Generate post instead of story")
+    gen_parser.add_argument("--series", action="store_true", help="Generate story series (3-7 connected stories)")
+    gen_parser.add_argument("--min-stories", type=int, default=3, help="Minimum stories in series (default: 3)")
+    gen_parser.add_argument("--max-stories", type=int, default=7, help="Maximum stories in series (default: 7)")
     gen_parser.add_argument("--static", action="store_true", help="Disable Ken Burns effect (static image)")
     gen_parser.add_argument("--no-image-search", action="store_true", help="Use local photos only (no Unsplash)")
     gen_parser.add_argument("--no-overlay", action="store_true", help="Disable text overlay on video")

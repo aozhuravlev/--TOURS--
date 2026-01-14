@@ -255,6 +255,71 @@ class ContentHistory:
 
         logger.info(f"Updated publication status: {publication.subtopic} -> {status}")
 
+    def record_story_series(
+        self,
+        category_id: str,
+        subtopic: str,
+        photo_paths: list[str],
+        music_path: str,
+        texts: list[str],
+        status: str = "pending",
+        publication_date: Optional[date] = None,
+    ) -> Publication:
+        """
+        Record a story series publication.
+
+        This properly tracks all photos used in the series for cooldown.
+
+        Args:
+            category_id: Category ID from topics.json
+            subtopic: Selected subtopic
+            photo_paths: List of paths to photos used (one per story)
+            music_path: Path to music track used
+            texts: List of texts for each story
+            status: Publication status
+            publication_date: Date of publication
+
+        Returns:
+            The created Publication record
+        """
+        if publication_date is None:
+            publication_date = date.today()
+
+        date_str = publication_date.isoformat()
+
+        # Create combined text preview
+        combined_text = f"[Series: {len(texts)} stories]\n" + "\n".join([
+            f"#{i + 1}: {t[:50]}{'...' if len(t) > 50 else ''}"
+            for i, t in enumerate(texts)
+        ])
+
+        publication = Publication(
+            date=date_str,
+            content_type="story_series",
+            category_id=category_id,
+            subtopic=subtopic,
+            photo_path=photo_paths[0] if photo_paths else "",  # Store first for reference
+            music_path=str(music_path),
+            text=combined_text,
+            status=status,
+        )
+
+        self.publications.append(publication)
+
+        # Update last_used tracking for subtopic and music
+        self.last_used_subtopics[subtopic] = date_str
+        self.last_used_music[str(Path(music_path))] = date_str
+
+        # Track ALL photos used in the series
+        for photo_path in photo_paths:
+            self.last_used_photos[str(Path(photo_path))] = date_str
+
+        self.save()
+
+        logger.info(f"Recorded story_series publication: {subtopic} ({len(photo_paths)} photos)")
+
+        return publication
+
     def get_pending_publications(self) -> list[Publication]:
         """Get all publications awaiting moderation/publishing."""
         return [p for p in self.publications if p.status == "pending"]

@@ -353,6 +353,7 @@ class VideoComposer:
         output_path: Optional[Path] = None,
         duration: Optional[int] = None,
         ken_burns: bool = False,
+        music_offset: float = 0,
     ) -> Path:
         """
         Create a story video from photo and music.
@@ -363,6 +364,7 @@ class VideoComposer:
             output_path: Custom output path (auto-generated if None)
             duration: Video duration in seconds (uses config default or music length)
             ken_burns: Enable Ken Burns effect (slow zoom)
+            music_offset: Start position in music file (seconds)
 
         Returns:
             Path to created video file
@@ -392,16 +394,16 @@ class VideoComposer:
             else:
                 duration = self.config.duration
 
-        logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration}s)")
+        logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration}s, offset={music_offset}s)")
 
         # Build FFmpeg command
         if ken_burns:
             cmd = self._build_ken_burns_command(
-                photo_path, music_path, output_path, duration
+                photo_path, music_path, output_path, duration, music_offset
             )
         else:
             cmd = self._build_static_command(
-                photo_path, music_path, output_path, duration
+                photo_path, music_path, output_path, duration, music_offset
             )
 
         # Execute FFmpeg
@@ -437,6 +439,7 @@ class VideoComposer:
         duration: Optional[int] = None,
         ken_burns: bool = True,
         text_config: Optional[TextOverlayConfig] = None,
+        music_offset: float = 0,
     ) -> Path:
         """
         Create a story video with text overlay.
@@ -451,6 +454,7 @@ class VideoComposer:
             duration: Video duration in seconds
             ken_burns: Enable Ken Burns effect
             text_config: Text overlay settings (uses defaults if None)
+            music_offset: Start position in music file (seconds)
 
         Returns:
             Path to created video file
@@ -476,6 +480,7 @@ class VideoComposer:
                 output_path=output_path,
                 duration=duration,
                 ken_burns=ken_burns,
+                music_offset=music_offset,
             )
 
         # Update config with actual font path
@@ -504,6 +509,7 @@ class VideoComposer:
                 output_path=output_path,
                 duration=duration,
                 ken_burns=ken_burns,
+                music_offset=music_offset,
             )
 
             return video_path
@@ -520,6 +526,7 @@ class VideoComposer:
         music_path: Path,
         output_path: Path,
         duration: int,
+        music_offset: float = 0,
     ) -> list[str]:
         """
         Build FFmpeg command for static photo video.
@@ -536,12 +543,19 @@ class VideoComposer:
             f"setsar=1"
         )
 
-        return [
+        cmd = [
             self.ffmpeg_path,
             "-y",  # Overwrite output
             "-loop", "1",  # Loop image
             "-i", str(photo_path),
-            "-i", str(music_path),
+        ]
+
+        # Add music with optional offset
+        if music_offset > 0:
+            cmd.extend(["-ss", str(music_offset)])
+        cmd.extend(["-i", str(music_path)])
+
+        cmd.extend([
             "-vf", vf,
             "-c:v", self.config.codec,
             "-preset", self.config.preset,
@@ -553,7 +567,9 @@ class VideoComposer:
             "-movflags", "+faststart",  # Web optimization
             "-shortest",  # End when shortest input ends
             str(output_path),
-        ]
+        ])
+
+        return cmd
 
     def _build_ken_burns_command(
         self,
@@ -561,6 +577,7 @@ class VideoComposer:
         music_path: Path,
         output_path: Path,
         duration: int,
+        music_offset: float = 0,
     ) -> list[str]:
         """
         Build FFmpeg command with Ken Burns effect (slow zoom in).
@@ -589,12 +606,19 @@ class VideoComposer:
             f"setsar=1"
         )
 
-        return [
+        cmd = [
             self.ffmpeg_path,
             "-y",
             "-loop", "1",
             "-i", str(photo_path),
-            "-i", str(music_path),
+        ]
+
+        # Add music with optional offset
+        if music_offset > 0:
+            cmd.extend(["-ss", str(music_offset)])
+        cmd.extend(["-i", str(music_path)])
+
+        cmd.extend([
             "-vf", vf,
             "-c:v", self.config.codec,
             "-preset", self.config.preset,
@@ -606,7 +630,9 @@ class VideoComposer:
             "-movflags", "+faststart",
             "-shortest",
             str(output_path),
-        ]
+        ])
+
+        return cmd
 
     def compose_post_image(
         self,
@@ -664,6 +690,81 @@ class VideoComposer:
 
         logger.info(f"Post image created: {output_path.name}")
         return output_path
+
+    def compose_story_series(
+        self,
+        stories: list[dict],
+        music_path: Path,
+        ken_burns: bool = True,
+        story_duration: int = 15,
+    ) -> list[Path]:
+        """
+        Create a series of story videos with continuous music.
+
+        Each video uses a sequential segment of the same music track,
+        creating a continuous listening experience when played in order.
+
+        Args:
+            stories: List of dicts with 'photo_path' and 'text' keys
+            music_path: Path to music file (will be split into segments)
+            ken_burns: Enable Ken Burns effect
+            story_duration: Duration of each story in seconds
+
+        Returns:
+            List of paths to created video files
+        """
+        music_path = Path(music_path)
+        if not music_path.exists():
+            raise FileNotFoundError(f"Music not found: {music_path}")
+
+        # Get total music duration
+        music_duration = self._get_media_duration(music_path)
+        if not music_duration:
+            music_duration = len(stories) * story_duration + 30  # Estimate if can't detect
+
+        # Calculate music offset for each story
+        total_needed = len(stories) * story_duration
+        if music_duration < total_needed:
+            logger.warning(
+                f"Music ({music_duration:.1f}s) shorter than needed ({total_needed}s). "
+                f"Last stories may have overlapping/repeated music."
+            )
+
+        video_paths = []
+        for i, story in enumerate(stories):
+            photo_path = Path(story["photo_path"])
+            text = story.get("text", "")
+
+            music_offset = i * story_duration
+
+            # If music would run out, loop back (optional: could also stop)
+            if music_offset + story_duration > music_duration:
+                music_offset = music_offset % music_duration
+
+            logger.info(f"Composing story {i + 1}/{len(stories)}: music offset {music_offset}s")
+
+            if text:
+                video_path = self.compose_story_with_overlay(
+                    photo_path=photo_path,
+                    music_path=music_path,
+                    text=text,
+                    duration=story_duration,
+                    ken_burns=ken_burns,
+                    music_offset=music_offset,
+                )
+            else:
+                video_path = self.compose_story(
+                    photo_path=photo_path,
+                    music_path=music_path,
+                    duration=story_duration,
+                    ken_burns=ken_burns,
+                    music_offset=music_offset,
+                )
+
+            video_paths.append(video_path)
+
+        logger.info(f"Story series complete: {len(video_paths)} videos")
+        return video_paths
 
     def cleanup_old_files(self, keep_days: int = 7) -> int:
         """

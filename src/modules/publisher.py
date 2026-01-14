@@ -32,6 +32,21 @@ class PublishResult:
     error: Optional[str] = None
 
 
+@dataclass
+class SeriesPublishResult:
+    """Result of story series publish operation."""
+    success: bool
+    total: int
+    published: int
+    media_ids: list[str]
+    errors: list[str]
+
+    @property
+    def partial_success(self) -> bool:
+        """True if some but not all stories were published."""
+        return 0 < self.published < self.total
+
+
 class InstagramPublisher:
     """
     Publishes content to Instagram via Graph API.
@@ -106,6 +121,64 @@ class InstagramPublisher:
             return PublishResult(success=True, media_id=media_id)
         else:
             return PublishResult(success=False, error="Failed to publish container")
+
+    def publish_story_series(
+        self,
+        video_urls: list[str],
+        delay_between: int = 2,
+    ) -> SeriesPublishResult:
+        """
+        Publish a series of video stories to Instagram.
+
+        Stories are published in order with a small delay between each.
+
+        Args:
+            video_urls: List of public URLs for each story video
+            delay_between: Seconds to wait between publishing each story
+
+        Returns:
+            SeriesPublishResult with details of all published stories
+        """
+        logger.info(f"Publishing story series: {len(video_urls)} stories")
+
+        media_ids = []
+        errors = []
+        total = len(video_urls)
+
+        for i, video_url in enumerate(video_urls):
+            logger.info(f"Publishing story {i + 1}/{total}")
+
+            result = self.publish_story(video_url=video_url)
+
+            if result.success and result.media_id:
+                media_ids.append(result.media_id)
+                logger.info(f"  Story {i + 1} published: {result.media_id}")
+            else:
+                error_msg = result.error or "Unknown error"
+                errors.append(f"Story {i + 1}: {error_msg}")
+                logger.error(f"  Story {i + 1} failed: {error_msg}")
+
+            # Delay between stories (except after the last one)
+            if i < total - 1 and delay_between > 0:
+                time.sleep(delay_between)
+
+        published = len(media_ids)
+        success = published == total
+
+        if success:
+            logger.info(f"Story series published successfully: {published}/{total}")
+        elif published > 0:
+            logger.warning(f"Story series partially published: {published}/{total}")
+        else:
+            logger.error(f"Story series publishing failed: 0/{total}")
+
+        return SeriesPublishResult(
+            success=success,
+            total=total,
+            published=published,
+            media_ids=media_ids,
+            errors=errors,
+        )
 
     def publish_post(
         self,

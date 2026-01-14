@@ -19,7 +19,7 @@ from datetime import datetime
 
 from .modules.topic_selector import TopicSelector, SelectedTopic
 from .modules.news_fetcher import NewsFetcher, NewsResult
-from .modules.text_generator import TextGenerator, GeneratedText
+from .modules.text_generator import TextGenerator, GeneratedText, GeneratedStorySeries as TextStorySeries, StoryItem
 from .modules.media_manager import MediaManager, MediaFile
 from .modules.video_composer import VideoComposer, VideoConfig
 from .modules.content_history import ContentHistory, Publication
@@ -52,6 +52,45 @@ class GeneratedContent:
     def caption(self) -> str:
         """Get final text for Instagram caption."""
         return self.text.humanized_text
+
+
+@dataclass
+class StorySeriesItem:
+    """Single story in a generated series."""
+    order: int
+    angle: str
+    text: str
+    keywords: str
+    photo: MediaFile
+    video_path: Path
+
+
+@dataclass
+class GeneratedStorySeriesResult:
+    """Complete generated story series package."""
+    # Topic
+    topic: SelectedTopic
+    facts: str
+
+    # Stories
+    stories: list[StorySeriesItem]
+    music: MediaFile
+
+    # Metadata
+    created_at: datetime = field(default_factory=datetime.now)
+    publication: Optional[Publication] = None
+    success: bool = True
+    error: Optional[str] = None
+
+    @property
+    def video_paths(self) -> list[Path]:
+        """Get all video paths in order."""
+        return [s.video_path for s in self.stories]
+
+    @property
+    def story_count(self) -> int:
+        """Get number of stories."""
+        return len(self.stories)
 
 
 class Orchestrator:
@@ -206,6 +245,190 @@ class Orchestrator:
             category_id=category_id,
             ken_burns=False,
         )
+
+    def generate_story_series(
+        self,
+        category_id: Optional[str] = None,
+        ken_burns: bool = True,
+        min_count: int = 3,
+        max_count: int = 7,
+        story_duration: int = 15,
+    ) -> Optional[GeneratedStorySeriesResult]:
+        """
+        Generate a series of connected Instagram Stories.
+
+        Args:
+            category_id: Optional category filter
+            ken_burns: Use Ken Burns effect in videos
+            min_count: Minimum number of stories (default 3)
+            max_count: Maximum number of stories (default 7)
+            story_duration: Duration of each story in seconds
+
+        Returns:
+            GeneratedStorySeriesResult or None on failure
+        """
+        logger.info("=== Starting STORY SERIES generation ===")
+
+        # Step 1: Select topic
+        logger.info("Step 1: Selecting topic...")
+        topic = self.topic_selector.select_random(category_id=category_id)
+        if not topic:
+            logger.error("Failed to select topic")
+            return None
+        logger.info(f"Selected: [{topic.category_name}] {topic.subtopic}")
+
+        # Step 2: Fetch facts from Perplexity
+        logger.info("Step 2: Fetching facts...")
+        news_result = self.news_fetcher.search(
+            topic=topic.category_name,
+            subtopic=topic.subtopic,
+        )
+        facts = news_result.content if news_result.success else ""
+        if facts:
+            logger.info(f"Got {len(facts)} chars of facts")
+        else:
+            logger.warning("No facts fetched, continuing without")
+
+        # Step 3: Generate story series text
+        logger.info("Step 3: Generating story series text...")
+        text_series = self.text_generator.generate_story_series(
+            topic=topic.category_name,
+            subtopic=topic.subtopic,
+            facts=facts,
+            min_count=min_count,
+            max_count=max_count,
+        )
+
+        if not text_series.success:
+            logger.error(f"Story series generation failed: {text_series.error}")
+            return None
+        logger.info(f"Generated {len(text_series.stories)} stories")
+
+        # Step 4: Select music (one track for all stories)
+        logger.info("Step 4: Selecting music...")
+        music = self.media_manager.select_music()
+        if not music:
+            logger.error("Failed to select music")
+            return None
+        logger.info(f"Selected music: {music.filename}")
+
+        # Step 5: For each story, find photo and prepare data
+        logger.info("Step 5: Finding photos for each story...")
+        story_data = []
+
+        for i, story_item in enumerate(text_series.stories):
+            logger.info(f"  Story {i + 1}/{len(text_series.stories)}: {story_item.angle}")
+
+            # Try to find photo using keywords
+            photo = None
+            photo_source = "local"
+
+            if self.use_image_search and self.image_searcher:
+                # Use provided keywords or extract from text
+                keywords = story_item.keywords
+                if not keywords:
+                    keywords = self.text_generator.extract_english_keywords(
+                        russian_text=story_item.text,
+                        max_keywords=4,
+                    )
+
+                if keywords:
+                    logger.debug(f"    Keywords: {keywords}")
+                    photo_path = self.image_searcher.search_by_description(
+                        description=story_item.text,
+                        topic=topic.category_name,
+                        subtopic=topic.subtopic,
+                        english_keywords=keywords,
+                        location="Batumi Georgia",
+                        max_attempts=3,
+                    )
+                    if photo_path:
+                        photo = MediaFile(
+                            path=photo_path,
+                            filename=photo_path.name,
+                            category=topic.category_name,
+                        )
+                        photo_source = "online"
+
+            # Fallback to local pool
+            if not photo:
+                if self.use_image_search:
+                    logger.warning(f"    Online search failed for story {i + 1}, using local")
+                photo = self.media_manager.select_photo(
+                    category_id=topic.category_id,
+                    category_name=topic.category_name,
+                )
+
+            if not photo:
+                logger.error(f"Failed to find photo for story {i + 1}")
+                return None
+
+            logger.info(f"    Photo ({photo_source}): {photo.filename}")
+
+            story_data.append({
+                "order": story_item.order,
+                "angle": story_item.angle,
+                "text": story_item.text,
+                "keywords": story_item.keywords,
+                "photo": photo,
+            })
+
+        # Step 6: Compose all videos with sequential music
+        logger.info("Step 6: Composing videos...")
+
+        video_stories_input = [
+            {"photo_path": s["photo"].path, "text": s["text"]}
+            for s in story_data
+        ]
+
+        try:
+            video_paths = self.video_composer.compose_story_series(
+                stories=video_stories_input,
+                music_path=music.path,
+                ken_burns=ken_burns,
+                story_duration=story_duration,
+            )
+        except Exception as e:
+            logger.error(f"Video composition failed: {e}")
+            return None
+
+        logger.info(f"Created {len(video_paths)} videos")
+
+        # Step 7: Build result
+        logger.info("Step 7: Building result...")
+        series_items = []
+        for i, sd in enumerate(story_data):
+            series_items.append(StorySeriesItem(
+                order=sd["order"],
+                angle=sd["angle"],
+                text=sd["text"],
+                keywords=sd["keywords"],
+                photo=sd["photo"],
+                video_path=video_paths[i],
+            ))
+
+        # Step 8: Record to history (tracking ALL photos)
+        logger.info("Step 8: Recording to history...")
+        publication = self.history.record_story_series(
+            category_id=topic.category_id,
+            subtopic=topic.subtopic,
+            photo_paths=[str(sd["photo"].path) for sd in story_data],
+            music_path=str(music.path),
+            texts=[sd["text"] for sd in story_data],
+            status="pending",
+        )
+
+        result = GeneratedStorySeriesResult(
+            topic=topic,
+            facts=facts,
+            stories=series_items,
+            music=music,
+            publication=publication,
+            success=True,
+        )
+
+        logger.info(f"=== STORY SERIES generation complete ({len(series_items)} stories) ===")
+        return result
 
     def _generate_content(
         self,

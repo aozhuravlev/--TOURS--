@@ -1,9 +1,10 @@
 """
-Image searcher for finding and downloading photos from stock APIs.
+Image searcher for finding and downloading photos.
 
 Supports:
-- Unsplash API (primary)
-- Pexels API (fallback)
+- Wikimedia Commons (primary, best for specific topics)
+- Pexels API (fallback for generic photos)
+- Unsplash API (optional)
 
 Downloads, processes, and crops images to Instagram formats.
 """
@@ -30,12 +31,15 @@ class ImageResult:
     url: str  # Download URL
     thumb_url: str  # Preview URL
     author: str
-    source: str  # "unsplash" or "pexels"
+    source: str  # "wikimedia", "unsplash", or "pexels"
     description: Optional[str] = None
+    license: Optional[str] = None  # License info (for Wikimedia)
 
     @property
     def attribution(self) -> str:
         """Get attribution string for the image."""
+        if self.source == "wikimedia":
+            return f"Photo by {self.author} (Wikimedia Commons, {self.license or 'CC'})"
         return f"Photo by {self.author} on {self.source.capitalize()}"
 
 
@@ -85,6 +89,11 @@ class ImageSearcher:
         """
         Search for images matching query.
 
+        Priority:
+        1. Wikimedia Commons (best for specific topics like Georgian food)
+        2. Pexels (fallback for generic photos)
+        3. Unsplash (if configured)
+
         Args:
             query: Search query (keywords)
             count: Number of results to return
@@ -95,17 +104,20 @@ class ImageSearcher:
         """
         results = []
 
-        # Try Unsplash first
-        if self.unsplash_key:
-            try:
-                results = self._search_unsplash(query, count, orientation)
-                if results:
-                    logger.info(f"Found {len(results)} images on Unsplash for '{query}'")
-                    return results
-            except Exception as e:
-                logger.warning(f"Unsplash search failed: {e}")
+        # Priority 1: Wikimedia Commons (best for specific content)
+        # Use short query for Wikimedia (3-4 words work best)
+        wiki_query = ' '.join(query.split()[:4])
+        try:
+            results = self._search_wikimedia(wiki_query, count)
+            if results:
+                logger.info(f"Found {len(results)} images on Wikimedia for '{wiki_query}'")
+                return results
+            else:
+                logger.debug(f"Wikimedia: no results for '{wiki_query}'")
+        except Exception as e:
+            logger.warning(f"Wikimedia search failed: {e}")
 
-        # Fallback to Pexels
+        # Priority 2: Pexels (good generic photos)
         if self.pexels_key:
             try:
                 results = self._search_pexels(query, count, orientation)
@@ -114,6 +126,16 @@ class ImageSearcher:
                     return results
             except Exception as e:
                 logger.warning(f"Pexels search failed: {e}")
+
+        # Priority 3: Unsplash (optional)
+        if self.unsplash_key:
+            try:
+                results = self._search_unsplash(query, count, orientation)
+                if results:
+                    logger.info(f"Found {len(results)} images on Unsplash for '{query}'")
+                    return results
+            except Exception as e:
+                logger.warning(f"Unsplash search failed: {e}")
 
         logger.warning(f"No images found for '{query}'")
         return []
@@ -189,6 +211,119 @@ class ImageSearcher:
                 source="pexels",
                 description=photo.get("alt"),
             ))
+
+        return results
+
+    def _search_wikimedia(
+        self,
+        query: str,
+        count: int,
+    ) -> list[ImageResult]:
+        """
+        Search Wikimedia Commons for images.
+
+        Wikimedia Commons has excellent coverage of:
+        - Georgian cuisine (khachapuri, khinkali, etc.)
+        - Batumi landmarks and architecture
+        - Georgian culture and traditions
+
+        All images are freely licensed (CC-BY, CC-BY-SA, CC0, etc.)
+        """
+        # Step 1: Search for files
+        search_url = "https://commons.wikimedia.org/w/api.php"
+
+        search_params = {
+            "action": "query",
+            "format": "json",
+            "list": "search",
+            "srsearch": f"{query} filetype:bitmap",  # Only images
+            "srnamespace": "6",  # File namespace
+            "srlimit": count * 2,  # Get more to filter
+        }
+
+        try:
+            response = self.session.get(search_url, params=search_params, timeout=30)
+            response.raise_for_status()
+            search_data = response.json()
+        except Exception as e:
+            logger.warning(f"Wikimedia search failed: {e}")
+            return []
+
+        search_results = search_data.get("query", {}).get("search", [])
+
+        if not search_results:
+            logger.debug(f"Wikimedia: no search results for '{query}'")
+            return []
+
+        logger.debug(f"Wikimedia: found {len(search_results)} raw results for '{query}'")
+
+        # Step 2: Get image info (URLs, authors, licenses)
+        titles = [r["title"] for r in search_results]
+
+        info_params = {
+            "action": "query",
+            "format": "json",
+            "titles": "|".join(titles),
+            "prop": "imageinfo",
+            "iiprop": "url|user|extmetadata|size",
+            "iiurlwidth": 1200,  # Get scaled URL for reasonable size
+        }
+
+        try:
+            response = self.session.get(search_url, params=info_params, timeout=30)
+            response.raise_for_status()
+            info_data = response.json()
+        except Exception as e:
+            logger.warning(f"Wikimedia info query failed: {e}")
+            return []
+
+        pages = info_data.get("query", {}).get("pages", {})
+
+        results = []
+        for page_id, page in pages.items():
+            if page_id == "-1":  # Page not found
+                continue
+
+            imageinfo = page.get("imageinfo", [{}])[0]
+
+            # Skip small images (less than 800px)
+            width = imageinfo.get("width", 0)
+            height = imageinfo.get("height", 0)
+            if width < 800 or height < 800:
+                logger.debug(f"Wikimedia: skipping small image {width}x{height}")
+                continue
+
+            # Get URLs
+            url = imageinfo.get("thumburl") or imageinfo.get("url")
+            if not url:
+                continue
+
+            # Get metadata
+            extmeta = imageinfo.get("extmetadata", {})
+            author = extmeta.get("Artist", {}).get("value", imageinfo.get("user", "Unknown"))
+            # Clean HTML from author
+            if "<" in author:
+                import re
+                author = re.sub(r"<[^>]+>", "", author).strip()
+
+            license_info = extmeta.get("LicenseShortName", {}).get("value", "CC")
+            description = extmeta.get("ImageDescription", {}).get("value", "")
+            if "<" in description:
+                import re
+                description = re.sub(r"<[^>]+>", "", description)[:200]
+
+            results.append(ImageResult(
+                id=page.get("title", ""),
+                url=url,
+                thumb_url=imageinfo.get("thumburl", url),
+                author=author[:50],  # Limit author length
+                source="wikimedia",
+                description=description,
+                license=license_info,
+            ))
+
+            if len(results) >= count:
+                break
 
         return results
 
@@ -299,35 +434,40 @@ class ImageSearcher:
         subtopic: str,
         english_keywords: str = "",
         location: str = "Batumi Georgia",
-        max_attempts: int = 4,
+        max_attempts: int = 5,
     ) -> Optional[Path]:
         """
-        Search for image based on description and English keywords.
+        Search for image based on English keywords.
+
+        Uses Wikimedia Commons first, then Pexels as fallback.
+        Always adds "Georgia Batumi" to queries for relevance.
 
         Args:
-            description: Generated text description (Russian)
+            description: Generated text description (Russian) - not used directly
             topic: Main topic - used as category folder
-            subtopic: Specific subtopic
-            english_keywords: Pre-extracted English keywords (preferred)
+            subtopic: Specific subtopic - not used directly
+            english_keywords: English keywords for search (required for good results)
             location: Location context
             max_attempts: Maximum query attempts
 
         Returns:
             Path to downloaded image, or None if all attempts fail
         """
-        # Build query variations - English keywords first (best for search)
+        # Build query variations (English only)
         queries = []
 
-        # Priority 1: English keywords (best for stock photo search)
         if english_keywords:
+            # Priority 1: Keywords alone (best for Wikimedia - short queries work better)
             queries.append(english_keywords)
+            # Priority 2: Keywords + Georgia Batumi (for Pexels fallback)
+            queries.append(f"{english_keywords} Georgia Batumi")
+            # Priority 3: Keywords + Georgia (broader)
             queries.append(f"{english_keywords} Georgia")
 
-        # Priority 2: Location-based fallbacks
+        # Priority 4: Location-based fallbacks
         queries.extend([
-            f"{subtopic} Georgia",  # May work if subtopic has English cognates
-            "Georgian cuisine food" if "кухня" in topic.lower() else f"{location}",
             location,
+            "Batumi Georgia",
         ])
 
         # Remove empty/duplicate queries and limit attempts
