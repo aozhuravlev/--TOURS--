@@ -23,6 +23,7 @@ from .modules.text_generator import TextGenerator, GeneratedText
 from .modules.media_manager import MediaManager, MediaFile
 from .modules.video_composer import VideoComposer, VideoConfig
 from .modules.content_history import ContentHistory, Publication
+from .modules.image_searcher import ImageSearcher
 
 logger = logging.getLogger(__name__)
 
@@ -65,18 +66,23 @@ class Orchestrator:
         # API keys
         perplexity_api_key: str,
         deepseek_api_key: str,
+        unsplash_api_key: Optional[str] = None,
+        pexels_api_key: Optional[str] = None,
         # Paths
-        topics_path: Path,
-        prompts_dir: Path,
-        photos_path: Path,
-        music_path: Path,
-        output_dir: Path,
-        history_path: Path,
+        topics_path: Path = None,
+        prompts_dir: Path = None,
+        photos_path: Path = None,
+        music_path: Path = None,
+        output_dir: Path = None,
+        history_path: Path = None,
+        fonts_dir: Optional[Path] = None,
         # Settings
         video_config: Optional[VideoConfig] = None,
         subtopic_cooldown_days: int = 7,
         photo_cooldown_days: int = 30,
         music_cooldown_days: int = 14,
+        use_image_search: bool = True,
+        use_text_overlay: bool = True,
     ):
         """
         Initialize orchestrator with all dependencies.
@@ -84,18 +90,27 @@ class Orchestrator:
         Args:
             perplexity_api_key: API key for Perplexity
             deepseek_api_key: API key for DeepSeek
+            unsplash_api_key: API key for Unsplash (for image search)
+            pexels_api_key: API key for Pexels (fallback for image search)
             topics_path: Path to topics.json
             prompts_dir: Directory with prompt .txt files
             photos_path: Directory with photos
             music_path: Directory with music
             output_dir: Directory for generated videos
             history_path: Path to content_history.json
+            fonts_dir: Directory with font files for text overlays
             video_config: Optional video settings
             subtopic_cooldown_days: Days before subtopic can repeat
             photo_cooldown_days: Days before photo can repeat
             music_cooldown_days: Days before music can repeat
+            use_image_search: Whether to search for images online (vs local pool)
+            use_text_overlay: Whether to add text overlay on stories
         """
         logger.info("Initializing Orchestrator...")
+
+        # Feature flags
+        self.use_image_search = use_image_search and bool(unsplash_api_key or pexels_api_key)
+        self.use_text_overlay = use_text_overlay
 
         # Initialize content history first (needed by other modules)
         self.history = ContentHistory(
@@ -129,7 +144,26 @@ class Orchestrator:
         self.video_composer = VideoComposer(
             output_dir=output_dir,
             config=video_config,
+            fonts_dir=fonts_dir,
         )
+
+        # Initialize image searcher if API keys provided
+        self.image_searcher: Optional[ImageSearcher] = None
+        if self.use_image_search:
+            download_dir = photos_path / "downloaded" if photos_path else None
+            self.image_searcher = ImageSearcher(
+                unsplash_key=unsplash_api_key,
+                pexels_key=pexels_api_key,
+                download_dir=download_dir,
+            )
+            logger.info("Image search enabled (Unsplash/Pexels)")
+        else:
+            logger.info("Image search disabled, using local photo pool")
+
+        if self.use_text_overlay:
+            logger.info("Text overlay enabled for stories")
+        else:
+            logger.info("Text overlay disabled")
 
         logger.info("Orchestrator initialized successfully")
 
@@ -234,12 +268,50 @@ class Orchestrator:
 
         # Step 4: Select media
         logger.info("Step 4: Selecting media...")
-        photo = self.media_manager.select_photo(
-            category_id=topic.category_id,
-            category_name=topic.category_name,
-        )
+
+        # Try image search first, fallback to local pool
+        photo = None
+        photo_source = "local"
+
+        if self.use_image_search and self.image_searcher:
+            logger.info("Searching for image online...")
+
+            # Extract English keywords for better search results
+            english_keywords = self.text_generator.extract_english_keywords(
+                russian_text=text.humanized_text,
+                max_keywords=4,
+            )
+            if english_keywords:
+                logger.info(f"English keywords: {english_keywords}")
+
+            photo_path = self.image_searcher.search_by_description(
+                description=text.humanized_text,
+                topic=topic.category_name,
+                subtopic=topic.subtopic,
+                english_keywords=english_keywords,
+                location="Batumi Georgia",
+                max_attempts=4,
+            )
+            if photo_path:
+                photo = MediaFile(
+                    path=photo_path,
+                    filename=photo_path.name,
+                    category=topic.category_name,
+                )
+                photo_source = "online"
+                logger.info(f"Found image online: {photo.filename}")
+
+        # Fallback to local photo pool if search failed or disabled
         if not photo:
-            logger.error("Failed to select photo")
+            if self.use_image_search:
+                logger.warning("Online search failed, falling back to local pool")
+            photo = self.media_manager.select_photo(
+                category_id=topic.category_id,
+                category_name=topic.category_name,
+            )
+
+        if not photo:
+            logger.error("Failed to select photo (both online and local)")
             return None
 
         music = self.media_manager.select_music()
@@ -247,7 +319,7 @@ class Orchestrator:
             logger.error("Failed to select music")
             return None
 
-        logger.info(f"Selected photo: {photo.filename}")
+        logger.info(f"Selected photo ({photo_source}): {photo.filename}")
         logger.info(f"Selected music: {music.filename}")
 
         # Step 5: Compose video (for stories)
@@ -255,11 +327,20 @@ class Orchestrator:
         if content_type == "story":
             logger.info("Step 5: Composing video...")
             try:
-                video_path = self.video_composer.compose_story(
-                    photo_path=photo.path,
-                    music_path=music.path,
-                    ken_burns=ken_burns,
-                )
+                # Use text overlay if enabled
+                if self.use_text_overlay:
+                    video_path = self.video_composer.compose_story_with_overlay(
+                        photo_path=photo.path,
+                        music_path=music.path,
+                        text=text.humanized_text,
+                        ken_burns=ken_burns,
+                    )
+                else:
+                    video_path = self.video_composer.compose_story(
+                        photo_path=photo.path,
+                        music_path=music.path,
+                        ken_burns=ken_burns,
+                    )
                 logger.info(f"Video created: {video_path}")
             except Exception as e:
                 logger.error(f"Video composition failed: {e}")
@@ -336,6 +417,8 @@ class Orchestrator:
         """Clean up resources."""
         self.news_fetcher.close()
         self.text_generator.close()
+        if self.image_searcher:
+            self.image_searcher.close()
 
     def __enter__(self):
         return self

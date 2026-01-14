@@ -298,6 +298,58 @@ class TextGenerator:
 
         return ""
 
+    def extract_english_keywords(self, russian_text: str, max_keywords: int = 5) -> str:
+        """
+        Extract English keywords from Russian text for image search.
+
+        Uses DeepSeek to translate and extract relevant search terms.
+
+        Args:
+            russian_text: Russian text to extract keywords from
+            max_keywords: Maximum number of keywords to return
+
+        Returns:
+            Space-separated English keywords for image search
+        """
+        prompt = f"""Extract {max_keywords} most important visual keywords from this Russian text for image search.
+Return ONLY English keywords separated by spaces, nothing else.
+Focus on concrete visual objects (food, places, buildings, nature).
+Skip abstract concepts and emotions.
+
+Russian text: {russian_text}
+
+English keywords:"""
+
+        try:
+            response = self.client.post(
+                DEEPSEEK_API_URL,
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You extract English keywords for image search. "
+                                       "Return only keywords, no explanations."
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 50,
+                },
+            )
+            response.raise_for_status()
+
+            keywords = response.json()["choices"][0]["message"]["content"].strip()
+            # Clean up: remove punctuation, extra spaces
+            keywords = ' '.join(keywords.replace(',', ' ').replace('.', ' ').split())
+
+            logger.debug(f"Extracted English keywords: {keywords}")
+            return keywords
+
+        except Exception as e:
+            logger.warning(f"Failed to extract keywords: {e}")
+            return ""
+
     def close(self):
         """Close HTTP client."""
         self.client.close()
