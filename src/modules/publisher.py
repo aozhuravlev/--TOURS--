@@ -9,9 +9,15 @@ Requires:
 - Instagram Business Account
 - Facebook Page connected to Instagram
 - Access token with required permissions
+
+Anti-detection measures:
+- Human-like random delays between posts (10-350 seconds)
+- Randomization to hundredths of seconds
+- Variable timing patterns
 """
 
 import logging
+import random
 import time
 from pathlib import Path
 from typing import Optional
@@ -22,6 +28,36 @@ import httpx
 logger = logging.getLogger(__name__)
 
 GRAPH_API_BASE = "https://graph.facebook.com/v18.0"
+
+# Anti-detection settings
+MIN_DELAY_BETWEEN_STORIES = 10   # 10 seconds minimum
+MAX_DELAY_BETWEEN_STORIES = 350  # ~6 minutes maximum
+
+
+def human_like_delay(min_seconds: float, max_seconds: float) -> float:
+    """
+    Generate a human-like random delay with millisecond precision.
+
+    Humans don't act with exact second intervals - this adds natural variation
+    down to hundredths of a second to avoid detection patterns.
+
+    Args:
+        min_seconds: Minimum delay in seconds
+        max_seconds: Maximum delay in seconds
+
+    Returns:
+        Random delay value with high precision
+    """
+    # Base delay with full precision (to hundredths)
+    base_delay = random.uniform(min_seconds, max_seconds)
+
+    # Add micro-variations (simulates human inconsistency)
+    # Occasionally add extra "thinking" time (10% chance of +5-15 extra seconds)
+    if random.random() < 0.1:
+        base_delay += random.uniform(5.0, 15.0)
+
+    # Round to hundredths for realistic precision
+    return round(base_delay, 2)
 
 
 @dataclass
@@ -125,21 +161,25 @@ class InstagramPublisher:
     def publish_story_series(
         self,
         video_urls: list[str],
-        delay_between: int = 2,
+        min_delay: float = MIN_DELAY_BETWEEN_STORIES,
+        max_delay: float = MAX_DELAY_BETWEEN_STORIES,
     ) -> SeriesPublishResult:
         """
         Publish a series of video stories to Instagram.
 
-        Stories are published in order with a small delay between each.
+        Stories are published in order with human-like random delays between each
+        to avoid Instagram's automation detection.
 
         Args:
             video_urls: List of public URLs for each story video
-            delay_between: Seconds to wait between publishing each story
+            min_delay: Minimum seconds between stories (default: 10)
+            max_delay: Maximum seconds between stories (default: 350)
 
         Returns:
             SeriesPublishResult with details of all published stories
         """
         logger.info(f"Publishing story series: {len(video_urls)} stories")
+        logger.info(f"Using human-like delays: {min_delay}-{max_delay} seconds")
 
         media_ids = []
         errors = []
@@ -158,9 +198,11 @@ class InstagramPublisher:
                 errors.append(f"Story {i + 1}: {error_msg}")
                 logger.error(f"  Story {i + 1} failed: {error_msg}")
 
-            # Delay between stories (except after the last one)
-            if i < total - 1 and delay_between > 0:
-                time.sleep(delay_between)
+            # Human-like delay between stories (except after the last one)
+            if i < total - 1:
+                delay = human_like_delay(min_delay, max_delay)
+                logger.info(f"  Waiting {delay:.2f} seconds before next story...")
+                time.sleep(delay)
 
         published = len(media_ids)
         success = published == total

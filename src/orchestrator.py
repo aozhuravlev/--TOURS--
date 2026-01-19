@@ -249,6 +249,7 @@ class Orchestrator:
     def generate_story_series(
         self,
         category_id: Optional[str] = None,
+        subtopic: Optional[str] = None,
         ken_burns: bool = True,
         min_count: int = 3,
         max_count: int = 7,
@@ -259,6 +260,7 @@ class Orchestrator:
 
         Args:
             category_id: Optional category filter
+            subtopic: Optional specific subtopic name (overrides category_id)
             ken_burns: Use Ken Burns effect in videos
             min_count: Minimum number of stories (default 3)
             max_count: Maximum number of stories (default 7)
@@ -271,7 +273,10 @@ class Orchestrator:
 
         # Step 1: Select topic
         logger.info("Step 1: Selecting topic...")
-        topic = self.topic_selector.select_random(category_id=category_id)
+        if subtopic:
+            topic = self.topic_selector.select_specific(subtopic)
+        else:
+            topic = self.topic_selector.select_random(category_id=category_id)
         if not topic:
             logger.error("Failed to select topic")
             return None
@@ -315,6 +320,7 @@ class Orchestrator:
         # Step 5: For each story, find photo and prepare data
         logger.info("Step 5: Finding photos for each story...")
         story_data = []
+        used_photo_paths = []  # Track photos used in this series to avoid duplicates
 
         for i, story_item in enumerate(text_series.stories):
             logger.info(f"  Story {i + 1}/{len(text_series.stories)}: {story_item.angle}")
@@ -342,7 +348,7 @@ class Orchestrator:
                         location="Batumi Georgia",
                         max_attempts=3,
                     )
-                    if photo_path:
+                    if photo_path and str(photo_path) not in used_photo_paths:
                         photo = MediaFile(
                             path=photo_path,
                             filename=photo_path.name,
@@ -357,11 +363,16 @@ class Orchestrator:
                 photo = self.media_manager.select_photo(
                     category_id=topic.category_id,
                     category_name=topic.category_name,
+                    subtopic=topic.subtopic,
+                    exclude_paths=used_photo_paths,
                 )
 
             if not photo:
                 logger.error(f"Failed to find photo for story {i + 1}")
                 return None
+
+            # Track this photo to avoid reuse in same series
+            used_photo_paths.append(str(photo.path))
 
             logger.info(f"    Photo ({photo_source}): {photo.filename}")
 
@@ -531,6 +542,7 @@ class Orchestrator:
             photo = self.media_manager.select_photo(
                 category_id=topic.category_id,
                 category_name=topic.category_name,
+                subtopic=topic.subtopic,
             )
 
         if not photo:

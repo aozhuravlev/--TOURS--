@@ -158,6 +158,34 @@ class TopicSelector:
         logger.warning(f"Category not found: {category_name}")
         return None
 
+    def select_specific(self, subtopic: str) -> Optional[SelectedTopic]:
+        """
+        Select a specific subtopic by name.
+
+        Searches all categories for matching subtopic.
+
+        Args:
+            subtopic: Subtopic name (e.g., "Аренда велосипедов")
+
+        Returns:
+            SelectedTopic or None if not found
+        """
+        subtopic_lower = subtopic.lower().strip()
+
+        for cat in self.categories:
+            for sub in cat.get("subtopics", []):
+                if sub.lower().strip() == subtopic_lower:
+                    result = SelectedTopic(
+                        category_id=cat["id"],
+                        category_name=cat["name"],
+                        subtopic=sub,
+                    )
+                    logger.info(f"Selected specific topic: [{cat['name']}] {sub}")
+                    return result
+
+        logger.warning(f"Subtopic not found: {subtopic}")
+        return None
+
     def get_categories_list(self) -> list[dict]:
         """Get list of all categories with their IDs and names."""
         return [

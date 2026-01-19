@@ -3,7 +3,7 @@ Content history tracking to prevent repetition.
 
 Tracks published content and enforces cooldown periods for:
 - Subtopics (default: 7 days)
-- Photos (default: 30 days)
+- Photos (default: 90 days)
 - Music tracks (default: 14 days)
 """
 
@@ -43,7 +43,7 @@ class ContentHistory:
     """
     history_path: Path
     subtopic_cooldown_days: int = 7
-    photo_cooldown_days: int = 30
+    photo_cooldown_days: int = 90
     music_cooldown_days: int = 14
 
     # Internal state

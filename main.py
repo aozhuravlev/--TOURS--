@@ -127,6 +127,7 @@ def cmd_generate(args):
     if args.series:
         # Generate story series
         result = orchestrator.generate_story_series(
+            subtopic=getattr(args, "subtopic", None),
             ken_burns=not args.static,
             min_count=getattr(args, "min_stories", 3),
             max_count=getattr(args, "max_stories", 7),
@@ -144,6 +145,44 @@ def cmd_generate(args):
                 size = story.video_path.stat().st_size / 1024 / 1024
                 print(f"    Size: {size:.1f} MB")
             print("=" * 60)
+
+            # Send to Telegram if requested
+            if getattr(args, "send_telegram", False):
+                print("\nSending to Telegram for moderation...")
+                bot = create_telegram_bot(orchestrator)
+                if bot:
+                    bot.build_app()
+                    stories_data = [
+                        {
+                            "order": s.order,
+                            "text": s.text,
+                            "video_path": str(s.video_path),
+                        }
+                        for s in result.stories
+                    ]
+                    # Use short content_id (Telegram callback_data limit is 64 bytes)
+                    import hashlib
+                    short_hash = hashlib.md5(result.topic.subtopic.encode()).hexdigest()[:8]
+                    content_id = f"series_{short_hash}"
+
+                    async def send():
+                        await bot.start()
+                        success = await bot.send_series_for_moderation(
+                            content_id=content_id,
+                            topic=result.topic.category_name,
+                            subtopic=result.topic.subtopic,
+                            stories=stories_data,
+                        )
+                        await bot.stop()
+                        return success
+
+                    success = asyncio.run(send())
+                    if success:
+                        print("Sent to Telegram!")
+                    else:
+                        print("Failed to send to Telegram")
+                else:
+                    print("Telegram bot not configured")
         else:
             error = result.error if result else "Unknown error"
             print(f"Story series generation failed: {error}")
@@ -317,11 +356,13 @@ def main():
     gen_parser = subparsers.add_parser("generate", help="Generate content now")
     gen_parser.add_argument("--post", action="store_true", help="Generate post instead of story")
     gen_parser.add_argument("--series", action="store_true", help="Generate story series (3-7 connected stories)")
+    gen_parser.add_argument("--subtopic", type=str, help="Specific subtopic to use (e.g., 'Аренда велосипедов')")
     gen_parser.add_argument("--min-stories", type=int, default=3, help="Minimum stories in series (default: 3)")
     gen_parser.add_argument("--max-stories", type=int, default=7, help="Maximum stories in series (default: 7)")
     gen_parser.add_argument("--static", action="store_true", help="Disable Ken Burns effect (static image)")
     gen_parser.add_argument("--no-image-search", action="store_true", help="Use local photos only (no Unsplash)")
     gen_parser.add_argument("--no-overlay", action="store_true", help="Disable text overlay on video")
+    gen_parser.add_argument("--send-telegram", action="store_true", help="Send to Telegram for moderation")
 
     # stats command
     subparsers.add_parser("stats", help="Show system statistics")

@@ -22,6 +22,13 @@ from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+# Enable AVIF/HEIF support
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()  # Also handles AVIF
+except ImportError:
+    pass  # AVIF/HEIF support not available
+
 logger = logging.getLogger(__name__)
 
 
