@@ -12,6 +12,7 @@ import sys
 import os
 import logging
 import argparse
+import asyncio
 from pathlib import Path
 
 # Project root
@@ -23,6 +24,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 from src.modules.media_uploader import MediaUploader, get_uploader_config
 from src.modules.publisher import InstagramPublisher
+from src.modules.telegram_bot import ModerationBot
 
 # Setup logging
 logging.basicConfig(
@@ -74,20 +76,25 @@ def upload_videos(videos: list[Path], dry_run: bool = False) -> list[str]:
     return urls
 
 
-def publish_stories(video_urls: list[str], dry_run: bool = False) -> bool:
-    """Publish stories to Instagram."""
+def publish_stories(video_urls: list[str], dry_run: bool = False):
+    """
+    Publish stories to Instagram.
+
+    Returns:
+        SeriesPublishResult on success/partial success, None on failure
+    """
     if dry_run:
         logger.info("[DRY RUN] Would publish stories:")
         for i, url in enumerate(video_urls):
             logger.info(f"  {i + 1}. {url}")
-        return True
+        return None
 
     access_token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
     account_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID")
 
     if not access_token or not account_id:
         logger.error("Missing Instagram credentials in .env!")
-        return False
+        return None
 
     publisher = InstagramPublisher(
         access_token=access_token,
@@ -99,7 +106,7 @@ def publish_stories(video_urls: list[str], dry_run: bool = False) -> bool:
     if not publisher.verify_token():
         logger.error("Instagram token verification failed!")
         publisher.close()
-        return False
+        return None
 
     # Publish series
     logger.info(f"Publishing {len(video_urls)} stories...")
@@ -114,16 +121,43 @@ def publish_stories(video_urls: list[str], dry_run: bool = False) -> bool:
         logger.info("=" * 50)
         logger.info(f"SUCCESS! Published {result.published}/{result.total} stories")
         logger.info(f"Media IDs: {result.media_ids}")
-        return True
+        return result
     elif result.partial_success:
         logger.warning("=" * 50)
         logger.warning(f"PARTIAL SUCCESS: {result.published}/{result.total} stories")
         logger.warning(f"Errors: {result.errors}")
-        return True
+        return result
     else:
         logger.error("=" * 50)
         logger.error(f"FAILED to publish stories")
         logger.error(f"Errors: {result.errors}")
+        return None
+
+
+async def send_telegram_notification(result, subtopic: str) -> bool:
+    """Send publication notification to Telegram."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_MODERATOR_CHAT_ID")
+
+    if not token or not chat_id:
+        logger.warning("Telegram not configured, skipping notification")
+        return False
+
+    bot = ModerationBot(token=token, moderator_chat_id=int(chat_id))
+    bot.build_app()
+
+    try:
+        await bot.app.initialize()
+        success = await bot.send_publish_notification(
+            subtopic=subtopic,
+            published=result.published,
+            total=result.total,
+            media_ids=result.media_ids,
+        )
+        await bot.app.shutdown()
+        return success
+    except Exception as e:
+        logger.error(f"Failed to send Telegram notification: {e}")
         return False
 
 
@@ -133,6 +167,10 @@ def main():
     parser.add_argument("--upload-only", action="store_true", help="Only upload to hosting")
     parser.add_argument("--output-dir", type=str, default=str(PROJECT_ROOT / "output"),
                         help="Directory with video files")
+    parser.add_argument("--subtopic", type=str, default="Story Series",
+                        help="Subtopic name for notification")
+    parser.add_argument("--no-notify", action="store_true",
+                        help="Skip Telegram notification")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -170,9 +208,15 @@ def main():
     # Publish
     logger.info("-" * 50)
     logger.info("Step 2: Publishing to Instagram...")
-    success = publish_stories(urls, dry_run=args.dry_run)
+    result = publish_stories(urls, dry_run=args.dry_run)
 
-    if success:
+    if result:
+        # Send Telegram notification
+        if not args.dry_run and not args.no_notify:
+            logger.info("-" * 50)
+            logger.info("Step 3: Sending Telegram notification...")
+            asyncio.run(send_telegram_notification(result, args.subtopic))
+
         logger.info("=" * 50)
         logger.info("DONE!")
         sys.exit(0)

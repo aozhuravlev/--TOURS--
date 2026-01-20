@@ -539,6 +539,64 @@ class ModerationBot:
             logger.error(f"Failed to send story series: {e}")
             return False
 
+    async def send_publish_notification(
+        self,
+        subtopic: str,
+        published: int,
+        total: int,
+        media_ids: list[str],
+    ) -> bool:
+        """
+        Send notification about successful story publication.
+
+        Args:
+            subtopic: Topic name that was published
+            published: Number of successfully published stories
+            total: Total number of stories attempted
+            media_ids: List of Instagram media IDs
+
+        Returns:
+            True if notification sent successfully
+        """
+        if not self.app:
+            logger.error("Bot app not initialized. Call build_app() first.")
+            return False
+
+        # Format media IDs (truncate if too long)
+        if media_ids:
+            ids_str = ", ".join(media_ids[:3])
+            if len(media_ids) > 3:
+                ids_str += f"... (+{len(media_ids) - 3})"
+        else:
+            ids_str = "-"
+
+        # Build message
+        if published == total:
+            status = "✅ ОПУБЛИКОВАНО"
+        elif published > 0:
+            status = "⚠️ ЧАСТИЧНО ОПУБЛИКОВАНО"
+        else:
+            status = "❌ ОШИБКА ПУБЛИКАЦИИ"
+
+        message = (
+            f"{status}\n\n"
+            f"Тема: {subtopic}\n"
+            f"Историй: {published}/{total}\n"
+            f"ID: {ids_str}"
+        )
+
+        try:
+            await self.app.bot.send_message(
+                chat_id=self.moderator_chat_id,
+                text=message,
+            )
+            logger.info(f"Sent publish notification: {subtopic} ({published}/{total})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to send publish notification: {e}")
+            return False
+
     def run_polling(self):
         """Run bot with polling (blocking)."""
         if not self.app:
