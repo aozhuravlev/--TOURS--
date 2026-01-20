@@ -47,15 +47,15 @@ logger = logging.getLogger(__name__)
 
 
 def create_orchestrator(
-    use_image_search: bool = True,
     use_text_overlay: bool = True,
 ) -> Orchestrator:
     """Create and configure orchestrator."""
     return Orchestrator(
         perplexity_api_key=os.getenv("PERPLEXITY_API_KEY"),
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
-        unsplash_api_key=os.getenv("UNSPLASH_ACCESS_KEY"),
-        pexels_api_key=os.getenv("PEXELS_API_KEY"),
+        # Image search disabled - using local photo library only
+        unsplash_api_key=None,
+        pexels_api_key=None,
         topics_path=PROJECT_ROOT / "config" / "topics.json",
         prompts_dir=PROJECT_ROOT / "prompts",
         photos_path=PROJECT_ROOT / "media" / "photos",
@@ -70,7 +70,7 @@ def create_orchestrator(
         subtopic_cooldown_days=int(os.getenv("SUBTOPIC_COOLDOWN_DAYS", "7")),
         photo_cooldown_days=int(os.getenv("PHOTO_COOLDOWN_DAYS", "30")),
         music_cooldown_days=int(os.getenv("MUSIC_COOLDOWN_DAYS", "14")),
-        use_image_search=use_image_search,
+        use_image_search=False,
         use_text_overlay=use_text_overlay,
     )
 
@@ -116,11 +116,9 @@ def cmd_generate(args):
 
     logger.info("Starting content generation...")
 
-    use_image_search = not getattr(args, "no_image_search", False)
     use_text_overlay = not getattr(args, "no_overlay", False)
 
     orchestrator = create_orchestrator(
-        use_image_search=use_image_search,
         use_text_overlay=use_text_overlay,
     )
 
@@ -360,7 +358,6 @@ def main():
     gen_parser.add_argument("--min-stories", type=int, default=3, help="Minimum stories in series (default: 3)")
     gen_parser.add_argument("--max-stories", type=int, default=7, help="Maximum stories in series (default: 7)")
     gen_parser.add_argument("--static", action="store_true", help="Disable Ken Burns effect (static image)")
-    gen_parser.add_argument("--no-image-search", action="store_true", help="Use local photos only (no Unsplash)")
     gen_parser.add_argument("--no-overlay", action="store_true", help="Disable text overlay on video")
     gen_parser.add_argument("--send-telegram", action="store_true", help="Send to Telegram for moderation")
 
