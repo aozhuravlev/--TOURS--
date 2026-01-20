@@ -15,6 +15,7 @@ import subprocess
 import shutil
 import textwrap
 import tempfile
+import random
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
@@ -358,7 +359,7 @@ class VideoComposer:
         photo_path: Path,
         music_path: Path,
         output_path: Optional[Path] = None,
-        duration: Optional[int] = None,
+        duration: Optional[float] = None,
         ken_burns: bool = False,
         music_offset: float = 0,
     ) -> Path:
@@ -397,11 +398,11 @@ class VideoComposer:
         if duration is None:
             music_duration = self._get_media_duration(music_path)
             if music_duration and music_duration <= 60:
-                duration = int(music_duration)
+                duration = music_duration
             else:
-                duration = self.config.duration
+                duration = float(self.config.duration)
 
-        logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration}s, offset={music_offset}s)")
+        logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration:.2f}s, offset={music_offset:.2f}s)")
 
         # Build FFmpeg command
         if ken_burns:
@@ -443,7 +444,7 @@ class VideoComposer:
         music_path: Path,
         text: str,
         output_path: Optional[Path] = None,
-        duration: Optional[int] = None,
+        duration: Optional[float] = None,
         ken_burns: bool = True,
         text_config: Optional[TextOverlayConfig] = None,
         music_offset: float = 0,
@@ -532,7 +533,7 @@ class VideoComposer:
         photo_path: Path,
         music_path: Path,
         output_path: Path,
-        duration: int,
+        duration: float,
         music_offset: float = 0,
     ) -> list[str]:
         """
@@ -559,7 +560,7 @@ class VideoComposer:
 
         # Add music with optional offset
         if music_offset > 0:
-            cmd.extend(["-ss", str(music_offset)])
+            cmd.extend(["-ss", f"{music_offset:.3f}"])
         cmd.extend(["-i", str(music_path)])
 
         cmd.extend([
@@ -569,7 +570,7 @@ class VideoComposer:
             "-crf", str(self.config.crf),
             "-c:a", "aac",
             "-b:a", self.config.audio_bitrate,
-            "-t", str(duration),
+            "-t", f"{duration:.3f}",  # Precision to milliseconds
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",  # Web optimization
             "-shortest",  # End when shortest input ends
@@ -583,7 +584,7 @@ class VideoComposer:
         photo_path: Path,
         music_path: Path,
         output_path: Path,
-        duration: int,
+        duration: float,
         music_offset: float = 0,
     ) -> list[str]:
         """
@@ -594,7 +595,7 @@ class VideoComposer:
         w = self.config.width
         h = self.config.height
         fps = self.config.fps
-        total_frames = duration * fps
+        total_frames = int(duration * fps)
 
         # Zoom from 1.0 to 1.2 over duration
         # zoompan: z = zoom level, d = duration in frames
@@ -622,7 +623,7 @@ class VideoComposer:
 
         # Add music with optional offset
         if music_offset > 0:
-            cmd.extend(["-ss", str(music_offset)])
+            cmd.extend(["-ss", f"{music_offset:.3f}"])
         cmd.extend(["-i", str(music_path)])
 
         cmd.extend([
@@ -632,7 +633,7 @@ class VideoComposer:
             "-crf", str(self.config.crf),
             "-c:a", "aac",
             "-b:a", self.config.audio_bitrate,
-            "-t", str(duration),
+            "-t", f"{duration:.3f}",  # Precision to milliseconds
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             "-shortest",
@@ -698,12 +699,33 @@ class VideoComposer:
         logger.info(f"Post image created: {output_path.name}")
         return output_path
 
+    def _random_story_duration(
+        self,
+        min_seconds: float = 5.0,
+        max_seconds: float = 8.0,
+    ) -> float:
+        """
+        Generate random story duration with hundredths precision.
+
+        This avoids detection patterns from fixed-length videos.
+
+        Args:
+            min_seconds: Minimum duration
+            max_seconds: Maximum duration
+
+        Returns:
+            Random duration like 5.48, 7.22, etc.
+        """
+        return round(random.uniform(min_seconds, max_seconds), 2)
+
     def compose_story_series(
         self,
         stories: list[dict],
         music_path: Path,
         ken_burns: bool = True,
-        story_duration: int = 15,
+        story_duration: Optional[float] = None,
+        min_duration: float = 5.0,
+        max_duration: float = 8.0,
     ) -> list[Path]:
         """
         Create a series of story videos with continuous music.
@@ -711,11 +733,16 @@ class VideoComposer:
         Each video uses a sequential segment of the same music track,
         creating a continuous listening experience when played in order.
 
+        Duration for each story is randomized (5-8 seconds by default) with
+        hundredths precision to avoid detection patterns from fixed-length videos.
+
         Args:
             stories: List of dicts with 'photo_path' and 'text' keys
             music_path: Path to music file (will be split into segments)
             ken_burns: Enable Ken Burns effect
-            story_duration: Duration of each story in seconds
+            story_duration: Fixed duration for all stories (None = random per story)
+            min_duration: Minimum random duration (default: 5.0 seconds)
+            max_duration: Maximum random duration (default: 8.0 seconds)
 
         Returns:
             List of paths to created video files
@@ -726,36 +753,49 @@ class VideoComposer:
 
         # Get total music duration
         music_duration = self._get_media_duration(music_path)
-        if not music_duration:
-            music_duration = len(stories) * story_duration + 30  # Estimate if can't detect
 
-        # Calculate music offset for each story
-        total_needed = len(stories) * story_duration
+        # Pre-generate durations for each story
+        durations = []
+        for _ in stories:
+            if story_duration is not None:
+                durations.append(float(story_duration))
+            else:
+                durations.append(self._random_story_duration(min_duration, max_duration))
+
+        total_needed = sum(durations)
+
+        if not music_duration:
+            music_duration = total_needed + 30  # Estimate if can't detect
+
         if music_duration < total_needed:
             logger.warning(
-                f"Music ({music_duration:.1f}s) shorter than needed ({total_needed}s). "
+                f"Music ({music_duration:.1f}s) shorter than needed ({total_needed:.1f}s). "
                 f"Last stories may have overlapping/repeated music."
             )
 
         video_paths = []
+        music_offset = 0.0
+
         for i, story in enumerate(stories):
             photo_path = Path(story["photo_path"])
             text = story.get("text", "")
+            duration = durations[i]
 
-            music_offset = i * story_duration
-
-            # If music would run out, loop back (optional: could also stop)
-            if music_offset + story_duration > music_duration:
+            # If music would run out, loop back
+            if music_offset + duration > music_duration:
                 music_offset = music_offset % music_duration
 
-            logger.info(f"Composing story {i + 1}/{len(stories)}: music offset {music_offset}s")
+            logger.info(
+                f"Composing story {i + 1}/{len(stories)}: "
+                f"duration={duration:.2f}s, music_offset={music_offset:.2f}s"
+            )
 
             if text:
                 video_path = self.compose_story_with_overlay(
                     photo_path=photo_path,
                     music_path=music_path,
                     text=text,
-                    duration=story_duration,
+                    duration=duration,
                     ken_burns=ken_burns,
                     music_offset=music_offset,
                 )
@@ -763,14 +803,15 @@ class VideoComposer:
                 video_path = self.compose_story(
                     photo_path=photo_path,
                     music_path=music_path,
-                    duration=story_duration,
+                    duration=duration,
                     ken_burns=ken_burns,
                     music_offset=music_offset,
                 )
 
             video_paths.append(video_path)
+            music_offset += duration  # Advance to next segment
 
-        logger.info(f"Story series complete: {len(video_paths)} videos")
+        logger.info(f"Story series complete: {len(video_paths)} videos, total {total_needed:.2f}s")
         return video_paths
 
     def cleanup_old_files(self, keep_days: int = 7) -> int:

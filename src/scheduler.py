@@ -288,41 +288,58 @@ def create_default_scheduler(
         return True
 
     async def publish_callback() -> bool:
-        """Publish approved content."""
-        pending = orchestrator.get_pending_content()
-        approved = [p for p in pending if p.status == "approved"]
+        """
+        Publish approved content OR auto-approve and publish pending content older than 24h.
 
-        if not approved:
-            logger.info("No approved content to publish")
+        This unified approach ensures content is never stuck:
+        - If manually approved → publish immediately
+        - If pending > 24h without moderation → auto-approve and publish
+        """
+        pending_content = orchestrator.get_pending_content()
+        now = datetime.now()
+
+        # Collect content ready for publishing
+        to_publish = []
+
+        for publication in pending_content:
+            if publication.status == "approved":
+                # Already approved by moderator
+                to_publish.append(publication)
+            elif publication.status == "pending":
+                # Check if older than 24h - auto-approve
+                pub_date = datetime.fromisoformat(publication.date)
+                age = now - pub_date
+
+                if age > timedelta(hours=24):
+                    logger.info(f"Auto-approving (>24h): {publication.subtopic}")
+                    orchestrator.approve_content(publication)
+                    to_publish.append(publication)
+
+        if not to_publish:
+            logger.info("No content ready for publishing")
             return False
 
-        # Publish first approved item
-        publication = approved[0]
+        # Publish all ready content
+        published_count = 0
+        for publication in to_publish:
+            if publisher:
+                # TODO: Upload video to hosting and get URL
+                # result = publisher.publish_story(video_url, publication.text)
+                logger.warning(f"Publisher not fully implemented - would publish: {publication.subtopic}")
 
-        if publisher:
-            # TODO: Upload video to hosting and get URL
-            # result = publisher.publish_story(video_url, publication.text)
-            logger.warning("Publisher not fully implemented - would publish here")
+            orchestrator.mark_published(publication, "placeholder_id")
+            published_count += 1
+            logger.info(f"Published: {publication.subtopic}")
 
-        orchestrator.mark_published(publication, "placeholder_id")
+        logger.info(f"Publishing complete: {published_count} item(s)")
         return True
 
     async def auto_approve_callback() -> bool:
-        """Auto-approve content older than 24h."""
-        pending = orchestrator.get_pending_content()
-        now = datetime.now()
-
-        for publication in pending:
-            if publication.status != "pending":
-                continue
-
-            pub_date = datetime.fromisoformat(publication.date)
-            age = now - pub_date
-
-            if age > timedelta(hours=24):
-                logger.info(f"Auto-approving: {publication.subtopic}")
-                orchestrator.approve_content(publication)
-
+        """
+        Legacy auto-approve check - now handled by publish_callback.
+        Kept for backwards compatibility but does nothing.
+        """
+        logger.debug("Auto-approve check skipped (handled by publish_callback)")
         return True
 
     return ContentScheduler(

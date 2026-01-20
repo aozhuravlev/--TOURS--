@@ -253,7 +253,7 @@ class Orchestrator:
         ken_burns: bool = True,
         min_count: int = 3,
         max_count: int = 7,
-        story_duration: int = 15,
+        story_duration: Optional[float] = None,
     ) -> Optional[GeneratedStorySeriesResult]:
         """
         Generate a series of connected Instagram Stories.
@@ -264,7 +264,7 @@ class Orchestrator:
             ken_burns: Use Ken Burns effect in videos
             min_count: Minimum number of stories (default 3)
             max_count: Maximum number of stories (default 7)
-            story_duration: Duration of each story in seconds
+            story_duration: Duration per story (None = random 5-8s per story)
 
         Returns:
             GeneratedStorySeriesResult or None on failure
