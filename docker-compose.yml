@@ -1,0 +1,43 @@
+# tours.batumi Instagram Automation
+# Docker Compose for local development and production
+
+services:
+  tours-bot:
+    build: .
+    container_name: tours-batumi-bot
+    restart: unless-stopped
+
+    # Load environment variables from .env file
+    env_file:
+      - .env
+
+    environment:
+      - TZ=Europe/Moscow
+      # Override SSH key path for container
+      - MEDIA_SSH_KEY=/app/.ssh/key.pem
+
+    volumes:
+      # Persistent data (read-write)
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./output:/app/output
+
+      # Media library (read-only, updated by host)
+      - ./media:/app/media:ro
+
+      # SSH key for media upload (read-only)
+      # Local path - change for production server
+      - ${SSH_KEY_PATH:-/home/alex/-=TRANSLATOR=-/.ssh/zomro.pem}:/app/.ssh/key.pem:ro
+
+    # Healthcheck: verify Python process is running
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python main.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# For production, you might want named volumes:
+# volumes:
+#   tours-data:
+#   tours-logs:

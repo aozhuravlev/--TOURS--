@@ -94,20 +94,42 @@ python main.py publish-test
 - VPS от Hetzner, DigitalOcean, или аналоги
 - ~$5-10/месяц
 
-### 4.2. Docker
+### 4.2. Docker (ГОТОВО ✅)
 
-```dockerfile
-FROM python:3.11-slim
+Dockerfile и docker-compose.yml созданы и протестированы.
 
-RUN apt-get update && apt-get install -y ffmpeg
+```bash
+# Локальный запуск
+docker compose up -d --build
 
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Просмотр логов
+docker compose logs -f
 
-COPY . .
+# Остановка
+docker compose down
+```
 
-CMD ["python", "main.py", "run"]
+**Volumes:**
+- `./data` — история контента (rw)
+- `./logs` — логи (rw)
+- `./output` — сгенерированные видео (rw)
+- `./media` — фото/музыка (ro)
+- `SSH_KEY_PATH` — SSH ключ для загрузки на хостинг (ro)
+
+**Деплой на сервер:**
+```bash
+# 1. Копировать проект
+rsync -av --exclude=media --exclude=data ./tours-bot/ user@server:/opt/tours-bot/
+
+# 2. Копировать медиа и SSH ключ
+rsync -av ./media/ user@server:/opt/tours-bot/media/
+scp ~/.ssh/key.pem user@server:/opt/tours-bot/.ssh/
+
+# 3. Настроить .env
+SSH_KEY_PATH=/opt/tours-bot/.ssh/key.pem
+
+# 4. Запустить
+cd /opt/tours-bot && docker compose up -d
 ```
 
 ### 4.3. Systemd сервис (альтернатива Docker)
@@ -158,6 +180,7 @@ WantedBy=multi-user.target
 - [x] Nginx перезагружен на сервере (CI/CD deploy)
 - [x] Cron для очистки добавлен (файлы старше 3 дней)
 - [x] Тестовая публикация успешна ✅ (ID: 18039064748726858)
+- [x] Docker настроен (Dockerfile, docker-compose.yml)
 - [ ] Сервер развёрнут
 - [ ] Мониторинг настроен
 
@@ -182,4 +205,4 @@ WantedBy=multi-user.target
 
 ---
 
-*Обновлено: 2026-01-13*
+*Обновлено: 2026-01-20*
