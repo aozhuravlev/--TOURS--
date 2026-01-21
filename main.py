@@ -307,10 +307,49 @@ async def cmd_run(args):
     orchestrator = create_orchestrator()
     bot = create_telegram_bot(orchestrator)
 
+    # Create publisher and uploader (optional)
+    publisher = None
+    media_uploader = None
+
+    ig_token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+    ig_account_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID")
+
+    if ig_token and ig_account_id:
+        from src.modules.publisher import InstagramPublisher
+        publisher = InstagramPublisher(
+            access_token=ig_token,
+            instagram_account_id=ig_account_id,
+        )
+        logger.info("Instagram publisher configured")
+
+        # Create media uploader for hosting videos
+        ssh_host = os.getenv("MEDIA_SSH_HOST")
+        ssh_user = os.getenv("MEDIA_SSH_USER")
+        ssh_key = os.getenv("MEDIA_SSH_KEY")
+        public_url = os.getenv("MEDIA_PUBLIC_URL")
+
+        if ssh_host and ssh_user and ssh_key and public_url:
+            from src.modules.media_uploader import MediaUploader, UploaderConfig
+            media_uploader = MediaUploader(UploaderConfig(
+                ssh_host=ssh_host,
+                ssh_user=ssh_user,
+                ssh_key_path=Path(ssh_key),
+                remote_path=os.getenv("MEDIA_REMOTE_PATH", "/opt/translator/tours-media"),
+                public_base_url=public_url,
+                ssh_port=int(os.getenv("MEDIA_SSH_PORT", "22")),
+            ))
+            logger.info(f"Media uploader configured: {public_url}")
+        else:
+            logger.warning("Media uploader not configured (missing SSH/URL settings)")
+    else:
+        logger.warning("Instagram publisher not configured (missing token/account_id)")
+
     # Create scheduler
     scheduler = create_default_scheduler(
         orchestrator=orchestrator,
         telegram_bot=bot,
+        publisher=publisher,
+        media_uploader=media_uploader,
     )
 
     # Schedule tasks
@@ -336,6 +375,8 @@ async def cmd_run(args):
         scheduler.stop()
         if bot:
             await bot.stop()
+        if publisher:
+            publisher.close()
         orchestrator.close()
 
     logger.info("System stopped")

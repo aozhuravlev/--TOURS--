@@ -255,6 +255,7 @@ def create_default_scheduler(
     orchestrator,
     telegram_bot=None,
     publisher=None,
+    media_uploader=None,
 ) -> ContentScheduler:
     """
     Create scheduler with default callbacks.
@@ -263,26 +264,34 @@ def create_default_scheduler(
         orchestrator: Orchestrator instance
         telegram_bot: Optional ModerationBot instance
         publisher: Optional InstagramPublisher instance
+        media_uploader: Optional MediaUploader instance for uploading videos
 
     Returns:
         Configured ContentScheduler
     """
 
     async def generate_callback() -> bool:
-        """Generate content and send to moderation."""
-        content = orchestrator.generate_story()
-        if not content:
+        """Generate story series and send to moderation."""
+        result = orchestrator.generate_story_series()
+        if not result or not result.success:
             return False
 
         if telegram_bot:
-            await telegram_bot.send_for_moderation(
-                content_id=content.publication.date + "_" + content.topic.subtopic[:20],
-                content_type=content.content_type,
-                topic=content.topic.category_name,
-                subtopic=content.topic.subtopic,
-                text=content.caption,
-                video_path=content.video_path,
-                photo_path=content.photo.path,
+            # Prepare stories data for telegram
+            stories_data = [
+                {
+                    "order": story.order,
+                    "text": story.text,
+                    "video_path": str(story.video_path),
+                }
+                for story in result.stories
+            ]
+
+            await telegram_bot.send_series_for_moderation(
+                content_id=result.publication.date + "_" + result.topic.subtopic[:20],
+                topic=result.topic.category_name,
+                subtopic=result.topic.subtopic,
+                stories=stories_data,
             )
 
         return True
@@ -322,17 +331,67 @@ def create_default_scheduler(
         # Publish all ready content
         published_count = 0
         for publication in to_publish:
-            if publisher:
-                # TODO: Upload video to hosting and get URL
-                # result = publisher.publish_story(video_url, publication.text)
-                logger.warning(f"Publisher not fully implemented - would publish: {publication.subtopic}")
+            if publisher and media_uploader:
+                try:
+                    # For story series, get video paths from output directory
+                    from pathlib import Path
+                    import os
+                    output_dir = Path(os.getenv("OUTPUT_PATH", "output"))
 
-            orchestrator.mark_published(publication, "placeholder_id")
-            published_count += 1
-            logger.info(f"Published: {publication.subtopic}")
+                    # Find video files for this publication date
+                    video_files = sorted(output_dir.glob(f"story_{publication.date.replace('-', '')}*.mp4"))
+
+                    if not video_files:
+                        logger.warning(f"No video files found for {publication.subtopic}")
+                        orchestrator.mark_published(publication, "no_videos")
+                        continue
+
+                    # Upload videos and get public URLs
+                    video_urls = []
+                    for video_path in video_files:
+                        url = media_uploader.upload_file(video_path)
+                        if url:
+                            video_urls.append(url)
+                            logger.info(f"Uploaded: {video_path.name} -> {url}")
+                        else:
+                            logger.error(f"Failed to upload: {video_path}")
+
+                    if not video_urls:
+                        logger.error(f"No videos uploaded for {publication.subtopic}")
+                        continue
+
+                    # Publish to Instagram
+                    result = publisher.publish_story_series(video_urls)
+
+                    if result.success or result.partial_success:
+                        media_ids_str = ",".join(result.media_ids[:3])
+                        orchestrator.mark_published(publication, media_ids_str)
+
+                        # Send notification to moderator
+                        if telegram_bot:
+                            await telegram_bot.send_publish_notification(
+                                subtopic=publication.subtopic,
+                                published=result.published,
+                                total=result.total,
+                                media_ids=result.media_ids,
+                            )
+
+                        published_count += 1
+                        logger.info(f"Published: {publication.subtopic} ({result.published}/{result.total})")
+                    else:
+                        logger.error(f"Publishing failed: {publication.subtopic}")
+                        for error in result.errors:
+                            logger.error(f"  {error}")
+
+                except Exception as e:
+                    logger.error(f"Publishing error for {publication.subtopic}: {e}")
+            else:
+                logger.warning(f"Publisher/uploader not configured - marking as published: {publication.subtopic}")
+                orchestrator.mark_published(publication, "no_publisher")
+                published_count += 1
 
         logger.info(f"Publishing complete: {published_count} item(s)")
-        return True
+        return published_count > 0
 
     async def auto_approve_callback() -> bool:
         """
