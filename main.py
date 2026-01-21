@@ -84,6 +84,9 @@ def create_telegram_bot(orchestrator: Orchestrator) -> ModerationBot:
         logger.warning("Telegram bot not configured (missing token or chat_id)")
         return None
 
+    # We'll set this reference after bot creation for the callback
+    bot_ref = [None]
+
     async def on_approve(content_id: str, text: str):
         logger.info(f"Content approved via Telegram: {content_id}")
         # Find and approve publication
@@ -100,12 +103,49 @@ def create_telegram_bot(orchestrator: Orchestrator) -> ModerationBot:
                 orchestrator.reject_content(pub)
                 break
 
+    async def on_finish_moderation(content_id: str, approved_stories: list, prepared_result):
+        """Called when moderation is finished - render videos and notify."""
+        logger.info(f"Moderation finished for {content_id}: {len(approved_stories)} stories approved")
+
+        if not approved_stories:
+            logger.warning("No approved stories to render")
+            return
+
+        # Render videos for approved stories only
+        result = orchestrator.render_approved_stories(prepared_result, approved_stories)
+
+        if result and result.success:
+            logger.info(f"Rendered {result.story_count} videos for {result.topic.subtopic}")
+
+            # Notify moderator that rendering is complete
+            if bot_ref[0]:
+                await bot_ref[0].send_render_complete_notification(
+                    subtopic=result.topic.subtopic,
+                    story_count=result.story_count,
+                    video_paths=result.video_paths,
+                )
+        else:
+            logger.error(f"Failed to render videos for {content_id}")
+            # Notify about failure
+            if bot_ref[0] and bot_ref[0].app:
+                try:
+                    await bot_ref[0].app.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=f"❌ ОШИБКА РЕНДЕРИНГА\n\nНе удалось отрендерить видео для: {content_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send error notification: {e}")
+
     bot = ModerationBot(
         token=token,
         moderator_chat_id=int(chat_id),
         on_approve=on_approve,
         on_reject=on_reject,
+        on_finish_moderation=on_finish_moderation,
     )
+
+    # Store bot reference for use in callback
+    bot_ref[0] = bot
 
     return bot
 
@@ -123,29 +163,27 @@ def cmd_generate(args):
     )
 
     if args.series:
-        # Generate story series
-        result = orchestrator.generate_story_series(
-            subtopic=getattr(args, "subtopic", None),
-            ken_burns=not args.static,
-            min_count=getattr(args, "min_stories", 3),
-            max_count=getattr(args, "max_stories", 7),
-        )
-        if result and result.success:
-            print(f"\n{'=' * 60}")
-            print(f"Generated Story Series ({result.story_count} stories)")
-            print("=" * 60)
-            print(f"Topic: [{result.topic.category_name}] {result.topic.subtopic}")
-            print(f"\nStories:")
-            for story in result.stories:
-                print(f"\n  #{story.order} [{story.angle}]")
-                print(f"    Text: {story.text}")
-                print(f"    Video: {story.video_path.name}")
-                size = story.video_path.stat().st_size / 1024 / 1024
-                print(f"    Size: {size:.1f} MB")
-            print("=" * 60)
+        # Check if we should use the new workflow (prepare only, no render)
+        if getattr(args, "send_telegram", False):
+            # New workflow: prepare series (no video rendering) and send for moderation
+            result = orchestrator.prepare_story_series(
+                subtopic=getattr(args, "subtopic", None),
+                ken_burns=not args.static,
+                min_count=getattr(args, "min_stories", 3),
+                max_count=getattr(args, "max_stories", 7),
+            )
+            if result and result.success:
+                print(f"\n{'=' * 60}")
+                print(f"Prepared Story Series ({result.story_count} stories)")
+                print("=" * 60)
+                print(f"Topic: [{result.topic.category_name}] {result.topic.subtopic}")
+                print(f"\nStories (photos ready, videos will be rendered after moderation):")
+                for story in result.stories:
+                    print(f"\n  #{story.order} [{story.angle}]")
+                    print(f"    Text: {story.text}")
+                    print(f"    Photo: {story.photo.filename}")
+                print("=" * 60)
 
-            # Send to Telegram if requested
-            if getattr(args, "send_telegram", False):
                 print("\nSending to Telegram for moderation...")
                 bot = create_telegram_bot(orchestrator)
                 if bot:
@@ -154,37 +192,74 @@ def cmd_generate(args):
                         {
                             "order": s.order,
                             "text": s.text,
-                            "video_path": str(s.video_path),
+                            "photo_path": str(s.photo.path),
+                            "angle": s.angle,
                         }
                         for s in result.stories
                     ]
-                    # Use short content_id (Telegram callback_data limit is 64 bytes)
                     import hashlib
                     short_hash = hashlib.md5(result.topic.subtopic.encode()).hexdigest()[:8]
                     content_id = f"series_{short_hash}"
 
                     async def send():
                         await bot.start()
-                        success = await bot.send_series_for_moderation(
+                        success = await bot.send_prepared_series_for_moderation(
                             content_id=content_id,
                             topic=result.topic.category_name,
                             subtopic=result.topic.subtopic,
                             stories=stories_data,
+                            music_path=result.music.path,
+                            ken_burns=result.ken_burns,
+                            story_duration=result.story_duration,
+                            prepared_result=result,
                         )
+                        # Keep bot running to handle callbacks
+                        if success:
+                            print("Sent to Telegram! Waiting for moderation...")
+                            print("Press Ctrl+C to stop waiting.")
+                            try:
+                                while True:
+                                    await asyncio.sleep(1)
+                            except asyncio.CancelledError:
+                                pass
                         await bot.stop()
                         return success
 
-                    success = asyncio.run(send())
-                    if success:
-                        print("Sent to Telegram!")
-                    else:
-                        print("Failed to send to Telegram")
+                    try:
+                        asyncio.run(send())
+                    except KeyboardInterrupt:
+                        print("\nStopped.")
                 else:
                     print("Telegram bot not configured")
+            else:
+                error = result.error if result else "Unknown error"
+                print(f"Story series preparation failed: {error}")
+                sys.exit(1)
         else:
-            error = result.error if result else "Unknown error"
-            print(f"Story series generation failed: {error}")
-            sys.exit(1)
+            # Old workflow: generate full videos immediately (for local testing)
+            result = orchestrator.generate_story_series(
+                subtopic=getattr(args, "subtopic", None),
+                ken_burns=not args.static,
+                min_count=getattr(args, "min_stories", 3),
+                max_count=getattr(args, "max_stories", 7),
+            )
+            if result and result.success:
+                print(f"\n{'=' * 60}")
+                print(f"Generated Story Series ({result.story_count} stories)")
+                print("=" * 60)
+                print(f"Topic: [{result.topic.category_name}] {result.topic.subtopic}")
+                print(f"\nStories:")
+                for story in result.stories:
+                    print(f"\n  #{story.order} [{story.angle}]")
+                    print(f"    Text: {story.text}")
+                    print(f"    Video: {story.video_path.name}")
+                    size = story.video_path.stat().st_size / 1024 / 1024
+                    print(f"    Size: {size:.1f} MB")
+                print("=" * 60)
+            else:
+                error = result.error if result else "Unknown error"
+                print(f"Story series generation failed: {error}")
+                sys.exit(1)
     elif args.post:
         content = orchestrator.generate_post()
         content_type = "Post"

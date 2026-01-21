@@ -66,6 +66,36 @@ class StorySeriesItem:
 
 
 @dataclass
+class PreparedStory:
+    """Story prepared for moderation (without video)."""
+    order: int
+    angle: str
+    text: str
+    keywords: str
+    photo: MediaFile
+    # No video_path - video not rendered yet
+
+
+@dataclass
+class PreparedStorySeriesResult:
+    """Series prepared for moderation (before video rendering)."""
+    topic: SelectedTopic
+    facts: str
+    stories: list[PreparedStory]
+    music: MediaFile
+    ken_burns: bool = True
+    story_duration: Optional[float] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    success: bool = True
+    error: Optional[str] = None
+
+    @property
+    def story_count(self) -> int:
+        """Get number of stories."""
+        return len(self.stories)
+
+
+@dataclass
 class GeneratedStorySeriesResult:
     """Complete generated story series package."""
     # Topic
@@ -439,6 +469,251 @@ class Orchestrator:
         )
 
         logger.info(f"=== STORY SERIES generation complete ({len(series_items)} stories) ===")
+        return result
+
+    def prepare_story_series(
+        self,
+        category_id: Optional[str] = None,
+        subtopic: Optional[str] = None,
+        ken_burns: bool = True,
+        min_count: int = 3,
+        max_count: int = 7,
+        story_duration: Optional[float] = None,
+    ) -> Optional[PreparedStorySeriesResult]:
+        """
+        Prepare a series of stories for moderation (without rendering videos).
+
+        Args:
+            category_id: Optional category filter
+            subtopic: Optional specific subtopic name (overrides category_id)
+            ken_burns: Use Ken Burns effect when rendering (stored for later)
+            min_count: Minimum number of stories (default 3)
+            max_count: Maximum number of stories (default 7)
+            story_duration: Duration per story (None = random 5-8s per story)
+
+        Returns:
+            PreparedStorySeriesResult or None on failure
+        """
+        logger.info("=== Starting STORY SERIES preparation (no render) ===")
+
+        # Step 1: Select topic
+        logger.info("Step 1: Selecting topic...")
+        if subtopic:
+            topic = self.topic_selector.select_specific(subtopic)
+        else:
+            topic = self.topic_selector.select_random(category_id=category_id)
+        if not topic:
+            logger.error("Failed to select topic")
+            return None
+        logger.info(f"Selected: [{topic.category_name}] {topic.subtopic}")
+
+        # Step 2: Fetch facts from Perplexity
+        logger.info("Step 2: Fetching facts...")
+        news_result = self.news_fetcher.search(
+            topic=topic.category_name,
+            subtopic=topic.subtopic,
+        )
+        facts = news_result.content if news_result.success else ""
+        if facts:
+            logger.info(f"Got {len(facts)} chars of facts")
+        else:
+            logger.warning("No facts fetched, continuing without")
+
+        # Step 3: Generate story series text
+        logger.info("Step 3: Generating story series text...")
+        text_series = self.text_generator.generate_story_series(
+            topic=topic.category_name,
+            subtopic=topic.subtopic,
+            facts=facts,
+            min_count=min_count,
+            max_count=max_count,
+        )
+
+        if not text_series.success:
+            logger.error(f"Story series generation failed: {text_series.error}")
+            return None
+        logger.info(f"Generated {len(text_series.stories)} stories")
+
+        # Step 4: Select music (one track for all stories)
+        logger.info("Step 4: Selecting music...")
+        music = self.media_manager.select_music()
+        if not music:
+            logger.error("Failed to select music")
+            return None
+        logger.info(f"Selected music: {music.filename}")
+
+        # Step 5: For each story, find photo
+        logger.info("Step 5: Finding photos for each story...")
+        prepared_stories = []
+        used_photo_paths = []  # Track photos used in this series to avoid duplicates
+
+        for i, story_item in enumerate(text_series.stories):
+            logger.info(f"  Story {i + 1}/{len(text_series.stories)}: {story_item.angle}")
+
+            # Try to find photo using keywords
+            photo = None
+            photo_source = "local"
+
+            if self.use_image_search and self.image_searcher:
+                # Use provided keywords or extract from text
+                keywords = story_item.keywords
+                if not keywords:
+                    keywords = self.text_generator.extract_english_keywords(
+                        russian_text=story_item.text,
+                        max_keywords=4,
+                    )
+
+                if keywords:
+                    logger.debug(f"    Keywords: {keywords}")
+                    photo_path = self.image_searcher.search_by_description(
+                        description=story_item.text,
+                        topic=topic.category_name,
+                        subtopic=topic.subtopic,
+                        english_keywords=keywords,
+                        location="Batumi Georgia",
+                        max_attempts=3,
+                    )
+                    if photo_path and str(photo_path) not in used_photo_paths:
+                        photo = MediaFile(
+                            path=photo_path,
+                            filename=photo_path.name,
+                            category=topic.category_name,
+                        )
+                        photo_source = "online"
+
+            # Fallback to local pool
+            if not photo:
+                if self.use_image_search:
+                    logger.warning(f"    Online search failed for story {i + 1}, using local")
+                photo = self.media_manager.select_photo(
+                    category_id=topic.category_id,
+                    category_name=topic.category_name,
+                    subtopic=topic.subtopic,
+                    exclude_paths=used_photo_paths,
+                )
+
+            if not photo:
+                logger.error(f"Failed to find photo for story {i + 1}")
+                return None
+
+            # Track this photo to avoid reuse in same series
+            used_photo_paths.append(str(photo.path))
+
+            logger.info(f"    Photo ({photo_source}): {photo.filename}")
+
+            prepared_stories.append(PreparedStory(
+                order=story_item.order,
+                angle=story_item.angle,
+                text=story_item.text,
+                keywords=story_item.keywords,
+                photo=photo,
+            ))
+
+        # NO video rendering, NO history recording - that comes after moderation
+
+        result = PreparedStorySeriesResult(
+            topic=topic,
+            facts=facts,
+            stories=prepared_stories,
+            music=music,
+            ken_burns=ken_burns,
+            story_duration=story_duration,
+            success=True,
+        )
+
+        logger.info(f"=== STORY SERIES preparation complete ({len(prepared_stories)} stories) ===")
+        return result
+
+    def render_approved_stories(
+        self,
+        prepared: PreparedStorySeriesResult,
+        approved_stories: list[dict],
+    ) -> Optional[GeneratedStorySeriesResult]:
+        """
+        Render videos only for approved stories after moderation.
+
+        Args:
+            prepared: PreparedStorySeriesResult from prepare_story_series()
+            approved_stories: List of dicts with approved story data:
+                [{"order": 1, "text": "...", "photo_path": "..."}]
+
+        Returns:
+            GeneratedStorySeriesResult or None on failure
+        """
+        if not approved_stories:
+            logger.warning("No approved stories to render")
+            return None
+
+        logger.info(f"=== Rendering {len(approved_stories)} approved stories ===")
+
+        # Sort by order
+        approved_stories = sorted(approved_stories, key=lambda x: x["order"])
+
+        # Build input for video composer
+        video_stories_input = [
+            {"photo_path": Path(s["photo_path"]), "text": s["text"]}
+            for s in approved_stories
+        ]
+
+        # Render videos
+        logger.info("Composing videos...")
+        try:
+            video_paths = self.video_composer.compose_story_series(
+                stories=video_stories_input,
+                music_path=prepared.music.path,
+                ken_burns=prepared.ken_burns,
+                story_duration=prepared.story_duration,
+            )
+        except Exception as e:
+            logger.error(f"Video composition failed: {e}")
+            return None
+
+        logger.info(f"Created {len(video_paths)} videos")
+
+        # Build result items
+        series_items = []
+        for i, story_dict in enumerate(approved_stories):
+            # Find matching prepared story for metadata
+            prepared_story = None
+            for ps in prepared.stories:
+                if ps.order == story_dict["order"]:
+                    prepared_story = ps
+                    break
+
+            series_items.append(StorySeriesItem(
+                order=story_dict["order"],
+                angle=prepared_story.angle if prepared_story else "",
+                text=story_dict["text"],
+                keywords=prepared_story.keywords if prepared_story else "",
+                photo=MediaFile(
+                    path=Path(story_dict["photo_path"]),
+                    filename=Path(story_dict["photo_path"]).name,
+                    category=prepared.topic.category_name,
+                ),
+                video_path=video_paths[i],
+            ))
+
+        # Record to history
+        logger.info("Recording to history...")
+        publication = self.history.record_story_series(
+            category_id=prepared.topic.category_id,
+            subtopic=prepared.topic.subtopic,
+            photo_paths=[s["photo_path"] for s in approved_stories],
+            music_path=str(prepared.music.path),
+            texts=[s["text"] for s in approved_stories],
+            status="pending",
+        )
+
+        result = GeneratedStorySeriesResult(
+            topic=prepared.topic,
+            facts=prepared.facts,
+            stories=series_items,
+            music=prepared.music,
+            publication=publication,
+            success=True,
+        )
+
+        logger.info(f"=== Rendered {len(series_items)} stories ===")
         return result
 
     def _generate_content(

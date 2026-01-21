@@ -269,29 +269,40 @@ def create_default_scheduler(
     Returns:
         Configured ContentScheduler
     """
+    import hashlib
 
     async def generate_callback() -> bool:
-        """Generate story series and send to moderation."""
-        result = orchestrator.generate_story_series()
+        """Prepare story series (without rendering) and send to moderation."""
+        # Use new prepare_story_series (no video rendering yet)
+        result = orchestrator.prepare_story_series()
         if not result or not result.success:
             return False
 
         if telegram_bot:
-            # Prepare stories data for telegram
+            # Prepare stories data for telegram (photos, not videos)
             stories_data = [
                 {
                     "order": story.order,
                     "text": story.text,
-                    "video_path": str(story.video_path),
+                    "photo_path": str(story.photo.path),
+                    "angle": story.angle,
                 }
                 for story in result.stories
             ]
 
-            await telegram_bot.send_series_for_moderation(
-                content_id=result.publication.date + "_" + result.topic.subtopic[:20],
+            # Use short content_id (Telegram callback_data limit is 64 bytes)
+            short_hash = hashlib.md5(result.topic.subtopic.encode()).hexdigest()[:8]
+            content_id = f"series_{short_hash}"
+
+            await telegram_bot.send_prepared_series_for_moderation(
+                content_id=content_id,
                 topic=result.topic.category_name,
                 subtopic=result.topic.subtopic,
                 stories=stories_data,
+                music_path=result.music.path,
+                ken_burns=result.ken_burns,
+                story_duration=result.story_duration,
+                prepared_result=result,
             )
 
         return True
