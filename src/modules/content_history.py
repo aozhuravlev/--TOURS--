@@ -321,8 +321,8 @@ class ContentHistory:
         return publication
 
     def get_pending_publications(self) -> list[Publication]:
-        """Get all publications awaiting moderation/publishing."""
-        return [p for p in self.publications if p.status == "pending"]
+        """Get all publications awaiting moderation/publishing (pending or approved but not yet published)."""
+        return [p for p in self.publications if p.status in ("pending", "approved")]
 
     def get_stats(self) -> dict:
         """Get usage statistics."""

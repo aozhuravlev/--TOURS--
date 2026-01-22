@@ -2,7 +2,7 @@
 Topic selector for content generation.
 
 Selects random category and subtopic from topics.json,
-respecting content history cooldowns.
+respecting content history cooldowns and photo availability.
 """
 
 import json
@@ -13,6 +13,9 @@ from typing import Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Supported photo extensions (must match media_manager.py)
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heif", ".heic"}
 
 
 @dataclass
@@ -35,6 +38,7 @@ class TopicSelector:
         self,
         topics_path: Path,
         content_history=None,  # Optional ContentHistory for cooldown checks
+        photos_path: Optional[Path] = None,  # Path to photos directory for availability check
     ):
         """
         Initialize topic selector.
@@ -42,9 +46,11 @@ class TopicSelector:
         Args:
             topics_path: Path to topics.json file
             content_history: Optional ContentHistory instance
+            photos_path: Path to photos directory (if provided, topics without photos are filtered out)
         """
         self.topics_path = Path(topics_path)
         self.content_history = content_history
+        self.photos_path = Path(photos_path) if photos_path else None
         self.categories: list[dict] = []
 
         self._load_topics()
@@ -62,6 +68,57 @@ class TopicSelector:
         total_subtopics = sum(len(cat.get("subtopics", [])) for cat in self.categories)
         logger.info(f"Loaded {len(self.categories)} categories with {total_subtopics} subtopics")
 
+    def _has_photos_for_subtopic(self, category_name: str, subtopic: str) -> bool:
+        """
+        Check if a subtopic folder has photos.
+
+        Looks for photos in: photos_path/{category_name}/{subtopic}/
+        Falls back to: photos_path/{category_name}/ if subtopic folder doesn't exist
+
+        Args:
+            category_name: Category name (e.g., "Грузинская кухня")
+            subtopic: Subtopic name (e.g., "Хачапури по-аджарски")
+
+        Returns:
+            True if photos exist for this topic, False otherwise
+        """
+        if not self.photos_path:
+            return True  # No photos path configured, assume all topics have photos
+
+        # Try subtopic folder first
+        subtopic_folder = self.photos_path / category_name / subtopic
+        if subtopic_folder.exists() and subtopic_folder.is_dir():
+            photos = [
+                f for f in subtopic_folder.iterdir()
+                if f.is_file() and f.suffix.lower() in PHOTO_EXTENSIONS
+            ]
+            if photos:
+                return True
+
+        # Try category folder
+        category_folder = self.photos_path / category_name
+        if category_folder.exists() and category_folder.is_dir():
+            # Check for photos directly in category (not in subtopic subfolders)
+            photos = [
+                f for f in category_folder.iterdir()
+                if f.is_file() and f.suffix.lower() in PHOTO_EXTENSIONS
+            ]
+            if photos:
+                return True
+
+            # Check all subtopic folders in category
+            for subfolder in category_folder.iterdir():
+                if subfolder.is_dir():
+                    photos = [
+                        f for f in subfolder.iterdir()
+                        if f.is_file() and f.suffix.lower() in PHOTO_EXTENSIONS
+                    ]
+                    if photos:
+                        return True
+
+        logger.debug(f"No photos found for {category_name}/{subtopic}")
+        return False
+
     def get_all_subtopics(self) -> list[tuple[str, str, str]]:
         """
         Get all subtopics as flat list.
@@ -77,22 +134,30 @@ class TopicSelector:
                 result.append((cat_id, cat_name, subtopic))
         return result
 
-    def get_available_subtopics(self) -> list[tuple[str, str, str]]:
+    def get_available_subtopics(self, check_photos: bool = True) -> list[tuple[str, str, str]]:
         """
-        Get subtopics that are not on cooldown.
+        Get subtopics that are not on cooldown and have photos available.
+
+        Args:
+            check_photos: Whether to check for photo availability (default: True)
 
         Returns:
             List of available (category_id, category_name, subtopic) tuples
         """
         all_subtopics = self.get_all_subtopics()
 
-        if not self.content_history:
-            return all_subtopics
-
         available = []
         for cat_id, cat_name, subtopic in all_subtopics:
-            if self.content_history.is_subtopic_available(subtopic):
-                available.append((cat_id, cat_name, subtopic))
+            # Check cooldown
+            if self.content_history and not self.content_history.is_subtopic_available(subtopic):
+                continue
+
+            # Check photo availability
+            if check_photos and self.photos_path and not self._has_photos_for_subtopic(cat_name, subtopic):
+                logger.debug(f"Skipping {cat_name}/{subtopic} - no photos available")
+                continue
+
+            available.append((cat_id, cat_name, subtopic))
 
         logger.debug(f"Available subtopics: {len(available)}/{len(all_subtopics)}")
         return available
@@ -101,6 +166,7 @@ class TopicSelector:
         self,
         category_id: Optional[str] = None,
         check_cooldown: bool = True,
+        check_photos: bool = True,
     ) -> Optional[SelectedTopic]:
         """
         Select a random topic.
@@ -108,12 +174,24 @@ class TopicSelector:
         Args:
             category_id: Optional category filter
             check_cooldown: Whether to check content history
+            check_photos: Whether to check for photo availability
 
         Returns:
             SelectedTopic or None if no topics available
         """
-        if check_cooldown:
-            candidates = self.get_available_subtopics()
+        if check_cooldown or check_photos:
+            candidates = self.get_available_subtopics(check_photos=check_photos)
+            # If checking cooldown is disabled, add back cooldown topics
+            if not check_cooldown:
+                all_subtopics = self.get_all_subtopics()
+                # Filter by photo availability only
+                if check_photos and self.photos_path:
+                    candidates = [
+                        (cat_id, cat_name, sub) for cat_id, cat_name, sub in all_subtopics
+                        if self._has_photos_for_subtopic(cat_name, sub)
+                    ]
+                else:
+                    candidates = all_subtopics
         else:
             candidates = self.get_all_subtopics()
 

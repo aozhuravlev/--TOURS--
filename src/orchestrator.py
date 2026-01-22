@@ -193,6 +193,7 @@ class Orchestrator:
         self.topic_selector = TopicSelector(
             topics_path=topics_path,
             content_history=self.history,
+            photos_path=photos_path,  # Check photo availability when selecting topics
         )
 
         self.news_fetcher = NewsFetcher(

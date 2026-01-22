@@ -10,7 +10,9 @@ Manages scheduled tasks:
 import logging
 import random
 import asyncio
+import os
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from typing import Callable, Optional, Awaitable
 from dataclasses import dataclass
 from enum import Enum
@@ -18,6 +20,9 @@ from enum import Enum
 import schedule
 
 logger = logging.getLogger(__name__)
+
+# Lock file to prevent concurrent publishing
+PUBLISH_LOCK_FILE = Path("/tmp/tours_publish.lock")
 
 
 class TaskType(Enum):
@@ -314,7 +319,34 @@ def create_default_scheduler(
         This unified approach ensures content is never stuck:
         - If manually approved → publish immediately
         - If pending > 24h without moderation → auto-approve and publish
+
+        Uses a lock file to prevent concurrent publishing.
         """
+        # Check for lock file to prevent concurrent publishing
+        if PUBLISH_LOCK_FILE.exists():
+            logger.warning("Publishing already in progress (lock file exists), skipping")
+            return False
+
+        # Create lock file
+        try:
+            PUBLISH_LOCK_FILE.touch()
+            logger.debug("Created publish lock file")
+        except Exception as e:
+            logger.error(f"Failed to create lock file: {e}")
+            return False
+
+        try:
+            return await _do_publish()
+        finally:
+            # Always remove lock file
+            try:
+                PUBLISH_LOCK_FILE.unlink(missing_ok=True)
+                logger.debug("Removed publish lock file")
+            except Exception as e:
+                logger.warning(f"Failed to remove lock file: {e}")
+
+    async def _do_publish() -> bool:
+        """Internal publish logic."""
         pending_content = orchestrator.get_pending_content()
         now = datetime.now()
 
@@ -377,6 +409,15 @@ def create_default_scheduler(
                     if result.success or result.partial_success:
                         media_ids_str = ",".join(result.media_ids[:3])
                         orchestrator.mark_published(publication, media_ids_str)
+
+                        # Delete video files after successful publishing
+                        if result.success:
+                            for video_path in video_files:
+                                try:
+                                    video_path.unlink()
+                                    logger.info(f"Deleted published video: {video_path.name}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete {video_path.name}: {e}")
 
                         # Send notification to moderator
                         if telegram_bot:

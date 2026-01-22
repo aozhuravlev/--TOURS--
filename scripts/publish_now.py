@@ -26,6 +26,9 @@ from src.modules.media_uploader import MediaUploader, get_uploader_config
 from src.modules.publisher import InstagramPublisher
 from src.modules.telegram_bot import ModerationBot
 
+# Lock file to prevent concurrent publishing (same as scheduler uses)
+PUBLISH_LOCK_FILE = Path("/tmp/tours_publish.lock")
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +77,20 @@ def upload_videos(videos: list[Path], dry_run: bool = False) -> list[str]:
             logger.error(f"  FAILED to upload {video_path.name}")
 
     return urls
+
+
+def delete_published_videos(videos: list[Path], dry_run: bool = False) -> None:
+    """Delete videos after successful publishing to prevent duplicates."""
+    if dry_run:
+        logger.info("[DRY RUN] Would delete videos after publishing")
+        return
+
+    for video_path in videos:
+        try:
+            video_path.unlink()
+            logger.info(f"Deleted: {video_path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete {video_path.name}: {e}")
 
 
 def publish_stories(video_urls: list[str], dry_run: bool = False):
@@ -171,7 +188,23 @@ def main():
                         help="Subtopic name for notification")
     parser.add_argument("--no-notify", action="store_true",
                         help="Skip Telegram notification")
+    parser.add_argument("--force", action="store_true",
+                        help="Ignore lock file and publish anyway")
     args = parser.parse_args()
+
+    # Check for lock file to prevent concurrent publishing
+    if not args.dry_run and not args.force and PUBLISH_LOCK_FILE.exists():
+        logger.error("Publishing already in progress (lock file exists)")
+        logger.error("Use --force to override or wait for the other process")
+        sys.exit(1)
+
+    # Create lock file
+    if not args.dry_run:
+        try:
+            PUBLISH_LOCK_FILE.touch()
+            logger.info("Created publish lock")
+        except Exception as e:
+            logger.warning(f"Failed to create lock file: {e}")
 
     output_dir = Path(args.output_dir)
 
@@ -211,18 +244,37 @@ def main():
     result = publish_stories(urls, dry_run=args.dry_run)
 
     if result:
+        # Delete videos after successful publishing to prevent duplicates
+        if result.success and not args.dry_run:
+            logger.info("-" * 50)
+            logger.info("Step 3: Cleaning up published videos...")
+            delete_published_videos(videos, dry_run=args.dry_run)
+
         # Send Telegram notification
         if not args.dry_run and not args.no_notify:
             logger.info("-" * 50)
-            logger.info("Step 3: Sending Telegram notification...")
+            logger.info("Step 4: Sending Telegram notification...")
             asyncio.run(send_telegram_notification(result, args.subtopic))
 
         logger.info("=" * 50)
         logger.info("DONE!")
+        _cleanup_lock()
         sys.exit(0)
     else:
+        _cleanup_lock()
         sys.exit(1)
 
 
+def _cleanup_lock():
+    """Remove lock file."""
+    try:
+        PUBLISH_LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _cleanup_lock()
