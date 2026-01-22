@@ -11,9 +11,10 @@ import logging
 import asyncio
 import tempfile
 import io
+import json
 from pathlib import Path
 from typing import Optional, Callable, Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
 
 from PIL import Image
@@ -135,6 +136,105 @@ class ModerationBot:
         self._pending_prepared_series: dict[str, PendingSeriesForModeration] = {}
 
         self.app: Optional[Application] = None
+
+        # File for persisting pending series (so Docker bot can load data from manual generation)
+        self._persistence_file = Path("data/pending_series.json")
+
+    def _save_pending_series(self) -> None:
+        """Save pending prepared series to file for cross-process persistence."""
+        try:
+            data = {}
+            for content_id, series in self._pending_prepared_series.items():
+                data[content_id] = {
+                    "content_id": series.content_id,
+                    "topic": series.topic,
+                    "subtopic": series.subtopic,
+                    "music_path": str(series.music_path),
+                    "ken_burns": series.ken_burns,
+                    "story_duration": series.story_duration,
+                    "stories": [
+                        {
+                            "order": s.order,
+                            "text": s.text,
+                            "photo_path": str(s.photo_path),
+                            "angle": s.angle,
+                            "status": s.status,
+                            "edited_text": s.edited_text,
+                            "message_id": s.message_id,
+                        }
+                        for s in series.stories
+                    ],
+                    # Note: prepared_result is not serialized (complex object, not needed for moderation)
+                }
+
+            self._persistence_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._persistence_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            logger.debug(f"Saved {len(data)} pending series to {self._persistence_file}")
+
+        except Exception as e:
+            logger.error(f"Failed to save pending series: {e}")
+
+    def _load_pending_series(self) -> None:
+        """Load pending prepared series from file."""
+        if not self._persistence_file.exists():
+            return
+
+        try:
+            with open(self._persistence_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            for content_id, series_data in data.items():
+                if content_id not in self._pending_prepared_series:
+                    stories = [
+                        PendingStoryForModeration(
+                            order=s["order"],
+                            text=s["text"],
+                            photo_path=Path(s["photo_path"]),
+                            angle=s.get("angle", ""),
+                            status=s.get("status", "pending"),
+                            edited_text=s.get("edited_text"),
+                            message_id=s.get("message_id"),
+                        )
+                        for s in series_data["stories"]
+                    ]
+
+                    self._pending_prepared_series[content_id] = PendingSeriesForModeration(
+                        content_id=series_data["content_id"],
+                        topic=series_data["topic"],
+                        subtopic=series_data["subtopic"],
+                        stories=stories,
+                        music_path=Path(series_data["music_path"]),
+                        ken_burns=series_data.get("ken_burns", True),
+                        story_duration=series_data.get("story_duration"),
+                        prepared_result=None,  # Cannot restore complex object
+                    )
+
+            logger.debug(f"Loaded {len(data)} pending series from {self._persistence_file}")
+
+        except Exception as e:
+            logger.error(f"Failed to load pending series: {e}")
+
+    def _delete_series_from_file(self, content_id: str) -> None:
+        """Remove a series from the persistence file."""
+        if not self._persistence_file.exists():
+            return
+
+        try:
+            with open(self._persistence_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if content_id in data:
+                del data[content_id]
+
+                with open(self._persistence_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+
+                logger.debug(f"Deleted series {content_id} from persistence file")
+
+        except Exception as e:
+            logger.error(f"Failed to delete series from file: {e}")
 
     def build_app(self) -> Application:
         """Build and configure the bot application."""
@@ -279,6 +379,11 @@ class ModerationBot:
             new_text = update.message.text
 
             series = self._pending_prepared_series.get(content_id)
+            if not series:
+                # Try loading from file (for cross-process persistence)
+                self._load_pending_series()
+                series = self._pending_prepared_series.get(content_id)
+
             if series:
                 # Find and update story
                 for story in series.stories:
@@ -286,6 +391,9 @@ class ModerationBot:
                         story.edited_text = new_text
                         story.status = "edited"
                         break
+
+                # Persist change
+                self._save_pending_series()
 
             del self._editing_story[chat_id]
 
@@ -416,6 +524,11 @@ class ModerationBot:
         """Approve a single story in prepared series."""
         series = self._pending_prepared_series.get(content_id)
         if not series:
+            # Try loading from file (for cross-process persistence)
+            self._load_pending_series()
+            series = self._pending_prepared_series.get(content_id)
+
+        if not series:
             await query.edit_message_caption(
                 caption="⚠️ Серия не найдена или уже обработана."
             )
@@ -437,6 +550,9 @@ class ModerationBot:
         # Update status
         story.status = "approved"
 
+        # Persist change
+        self._save_pending_series()
+
         # Update caption to show approval
         await query.edit_message_caption(
             caption=f"✅ #{story.order}/{len(series.stories)} ОДОБРЕНО\n\n{story.text}"
@@ -447,6 +563,11 @@ class ModerationBot:
     async def _start_story_edit(self, query, content_id: str, order: int):
         """Start editing mode for a specific story."""
         series = self._pending_prepared_series.get(content_id)
+        if not series:
+            # Try loading from file (for cross-process persistence)
+            self._load_pending_series()
+            series = self._pending_prepared_series.get(content_id)
+
         if not series:
             await query.edit_message_caption(
                 caption="⚠️ Серия не найдена или уже обработана."
@@ -489,6 +610,10 @@ class ModerationBot:
         if edit_info:
             content_id, order = edit_info
             series = self._pending_prepared_series.get(content_id)
+            if not series:
+                # Try loading from file (for cross-process persistence)
+                self._load_pending_series()
+                series = self._pending_prepared_series.get(content_id)
             if series:
                 story = None
                 for s in series.stories:
@@ -512,6 +637,11 @@ class ModerationBot:
         """Mark a story as deleted."""
         series = self._pending_prepared_series.get(content_id)
         if not series:
+            # Try loading from file (for cross-process persistence)
+            self._load_pending_series()
+            series = self._pending_prepared_series.get(content_id)
+
+        if not series:
             await query.edit_message_caption(
                 caption="⚠️ Серия не найдена или уже обработана."
             )
@@ -533,6 +663,9 @@ class ModerationBot:
         # Update status
         story.status = "deleted"
 
+        # Persist change
+        self._save_pending_series()
+
         # Update caption to show deletion
         await query.edit_message_caption(
             caption=f"❌ #{story.order}/{len(series.stories)} УДАЛЕНО\n\n"
@@ -544,6 +677,11 @@ class ModerationBot:
     async def _finish_moderation(self, query, content_id: str):
         """Finish moderation and trigger video rendering."""
         series = self._pending_prepared_series.get(content_id)
+        if not series:
+            # Try loading from file (for cross-process persistence)
+            self._load_pending_series()
+            series = self._pending_prepared_series.get(content_id)
+
         if not series:
             # Check if it's an old-style series
             if content_id in self._pending_series:
@@ -575,8 +713,9 @@ class ModerationBot:
                 text=f"❌ Все истории удалены. Серия отклонена.\n\n"
                      f"Тема: {series.subtopic}"
             )
-            # Clean up
+            # Clean up memory and file
             del self._pending_prepared_series[content_id]
+            self._delete_series_from_file(content_id)
             if self.on_reject:
                 await self.on_reject(content_id)
             return
@@ -598,8 +737,9 @@ class ModerationBot:
                 series.prepared_result,
             )
 
-        # Clean up
+        # Clean up memory and file
         del self._pending_prepared_series[content_id]
+        self._delete_series_from_file(content_id)
 
         logger.info(f"Moderation finished for {content_id}: {len(approved_stories)} approved, {deleted_count} deleted")
 
@@ -613,6 +753,7 @@ class ModerationBot:
                 if self.on_reject:
                     await self.on_reject(content_id)
                 del self._pending_prepared_series[content_id]
+                self._delete_series_from_file(content_id)
                 await query.edit_message_text(
                     text=f"❌ СЕРИЯ ОТКЛОНЕНА\n\n{series.subtopic}"
                 )
@@ -642,6 +783,7 @@ class ModerationBot:
             del self._pending_series[content_id]
         if content_id in self._pending_prepared_series:
             del self._pending_prepared_series[content_id]
+            self._delete_series_from_file(content_id)
         del self._pending[content_id]
 
         if content.content_type == "story_series":
@@ -936,6 +1078,9 @@ class ModerationBot:
             story_duration=story_duration,
             prepared_result=prepared_result,
         )
+
+        # Persist to file for cross-process access
+        self._save_pending_series()
 
         try:
             bot = self.app.bot
