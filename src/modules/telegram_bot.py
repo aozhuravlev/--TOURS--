@@ -74,6 +74,7 @@ class PendingStoryForModeration:
     text: str
     photo_path: Path
     angle: str = ""
+    keywords: str = ""  # For result metadata
     status: str = "pending"  # "pending", "approved", "edited", "deleted"
     edited_text: Optional[str] = None
     message_id: Optional[int] = None
@@ -83,13 +84,14 @@ class PendingStoryForModeration:
 class PendingSeriesForModeration:
     """Story series in moderation (photos+texts, no videos yet)."""
     content_id: str
-    topic: str
+    topic: str  # category_name
     subtopic: str
     stories: list[PendingStoryForModeration]
     music_path: Path
     ken_burns: bool
     story_duration: Optional[float]
-    prepared_result: any = None  # PreparedStorySeriesResult from orchestrator
+    category_id: str = ""  # For history recording
+    prepared_result: any = None  # PreparedStorySeriesResult from orchestrator (not serialized)
 
 
 class ModerationBot:
@@ -149,6 +151,7 @@ class ModerationBot:
                     "content_id": series.content_id,
                     "topic": series.topic,
                     "subtopic": series.subtopic,
+                    "category_id": series.category_id,
                     "music_path": str(series.music_path),
                     "ken_burns": series.ken_burns,
                     "story_duration": series.story_duration,
@@ -158,13 +161,13 @@ class ModerationBot:
                             "text": s.text,
                             "photo_path": str(s.photo_path),
                             "angle": s.angle,
+                            "keywords": s.keywords,
                             "status": s.status,
                             "edited_text": s.edited_text,
                             "message_id": s.message_id,
                         }
                         for s in series.stories
                     ],
-                    # Note: prepared_result is not serialized (complex object, not needed for moderation)
                 }
 
             self._persistence_file.parent.mkdir(parents=True, exist_ok=True)
@@ -193,6 +196,7 @@ class ModerationBot:
                             text=s["text"],
                             photo_path=Path(s["photo_path"]),
                             angle=s.get("angle", ""),
+                            keywords=s.get("keywords", ""),
                             status=s.get("status", "pending"),
                             edited_text=s.get("edited_text"),
                             message_id=s.get("message_id"),
@@ -208,7 +212,8 @@ class ModerationBot:
                         music_path=Path(series_data["music_path"]),
                         ken_burns=series_data.get("ken_burns", True),
                         story_duration=series_data.get("story_duration"),
-                        prepared_result=None,  # Cannot restore complex object
+                        category_id=series_data.get("category_id", ""),
+                        prepared_result=None,  # Reconstructed in _finish_moderation
                     )
 
             logger.debug(f"Loaded {len(data)} pending series from {self._persistence_file}")
@@ -258,15 +263,19 @@ class ModerationBot:
 
         Telegram supports: JPG, PNG, WebP (up to 5MB for photos).
         This converts AVIF, HEIC, and other formats to JPEG.
-        Also resizes if too large.
+        Also resizes if too large and applies EXIF orientation.
 
         Returns:
             BytesIO buffer with JPEG data
         """
+        from PIL import ImageOps
         MAX_SIZE = 1280  # Max dimension for Telegram photos
 
         try:
             with Image.open(photo_path) as img:
+                # Apply EXIF orientation (fixes rotated photos)
+                img = ImageOps.exif_transpose(img)
+
                 # Convert to RGB if necessary (removes alpha, handles RGBA)
                 if img.mode in ('RGBA', 'P', 'LA'):
                     # Create white background for transparency
@@ -674,6 +683,49 @@ class ModerationBot:
 
         logger.info(f"Story {order} deleted for {content_id}")
 
+    def _reconstruct_prepared_result(self, series: PendingSeriesForModeration):
+        """
+        Reconstruct PreparedStorySeriesResult from serialized data.
+
+        Used when series was loaded from file and prepared_result is None.
+        """
+        # Lazy import to avoid circular dependencies
+        from src.orchestrator import PreparedStorySeriesResult, PreparedStory
+        from src.modules.topic_selector import SelectedTopic
+        from src.modules.media_manager import MediaFile
+
+        # Reconstruct topic
+        topic = SelectedTopic(
+            category_id=series.category_id or "",
+            category_name=series.topic,
+            subtopic=series.subtopic,
+        )
+
+        # Reconstruct music
+        music = MediaFile(path=series.music_path)
+
+        # Reconstruct prepared stories
+        prepared_stories = [
+            PreparedStory(
+                order=s.order,
+                angle=s.angle,
+                text=s.text,
+                keywords=s.keywords,
+                photo=MediaFile(path=s.photo_path),
+            )
+            for s in series.stories
+        ]
+
+        return PreparedStorySeriesResult(
+            topic=topic,
+            facts="",  # Not needed for rendering
+            stories=prepared_stories,
+            music=music,
+            ken_burns=series.ken_burns,
+            story_duration=series.story_duration,
+            success=True,
+        )
+
     async def _finish_moderation(self, query, content_id: str):
         """Finish moderation and trigger video rendering."""
         series = self._pending_prepared_series.get(content_id)
@@ -729,12 +781,18 @@ class ModerationBot:
                  f"Пожалуйста, подождите..."
         )
 
+        # Reconstruct prepared_result if it was loaded from file (None)
+        prepared_result = series.prepared_result
+        if prepared_result is None:
+            logger.info(f"Reconstructing prepared_result for {content_id} from serialized data")
+            prepared_result = self._reconstruct_prepared_result(series)
+
         # Call finish moderation callback
         if self.on_finish_moderation:
             await self.on_finish_moderation(
                 content_id,
                 approved_stories,
-                series.prepared_result,
+                prepared_result,
             )
 
         # Clean up memory and file
@@ -1030,6 +1088,7 @@ class ModerationBot:
         music_path: Path,
         ken_burns: bool = True,
         story_duration: Optional[float] = None,
+        category_id: str = "",
         prepared_result: any = None,
     ) -> bool:
         """
@@ -1042,10 +1101,11 @@ class ModerationBot:
             content_id: Unique content identifier
             topic: Category name
             subtopic: Subtopic name
-            stories: List of dicts with 'order', 'text', 'photo_path', 'angle' keys
+            stories: List of dicts with 'order', 'text', 'photo_path', 'angle', 'keywords' keys
             music_path: Path to music file
             ken_burns: Whether to use Ken Burns effect when rendering
             story_duration: Duration per story
+            category_id: Category ID for history recording
             prepared_result: PreparedStorySeriesResult from orchestrator
 
         Returns:
@@ -1062,6 +1122,7 @@ class ModerationBot:
                 text=s["text"],
                 photo_path=Path(s["photo_path"]),
                 angle=s.get("angle", ""),
+                keywords=s.get("keywords", ""),
                 status="pending",
             )
             for i, s in enumerate(stories)
@@ -1076,6 +1137,7 @@ class ModerationBot:
             music_path=music_path,
             ken_burns=ken_burns,
             story_duration=story_duration,
+            category_id=category_id,
             prepared_result=prepared_result,
         )
 

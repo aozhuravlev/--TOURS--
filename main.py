@@ -194,6 +194,7 @@ def cmd_generate(args):
                             "text": s.text,
                             "photo_path": str(s.photo.path),
                             "angle": s.angle,
+                            "keywords": s.keywords,
                         }
                         for s in result.stories
                     ]
@@ -211,6 +212,7 @@ def cmd_generate(args):
                             music_path=result.music.path,
                             ken_burns=result.ken_burns,
                             story_duration=result.story_duration,
+                            category_id=result.topic.category_id,
                             prepared_result=result,
                         )
                         # Keep bot running to handle callbacks

@@ -354,6 +354,44 @@ class VideoComposer:
         filename = f"{prefix}_{timestamp}.mp4"
         return self.output_dir / filename
 
+    def _apply_exif_orientation(self, photo_path: Path) -> tuple[Path, bool]:
+        """
+        Apply EXIF orientation to photo if needed.
+
+        FFmpeg doesn't reliably handle EXIF rotation, so we pre-process
+        the image with PIL and save to a temp file if rotation is needed.
+
+        Args:
+            photo_path: Path to original photo
+
+        Returns:
+            Tuple of (path_to_use, needs_cleanup) - if needs_cleanup is True,
+            the returned path is a temp file that should be deleted after use.
+        """
+        try:
+            with Image.open(photo_path) as img:
+                # Check if EXIF orientation exists and requires rotation
+                exif = img.getexif()
+                orientation = exif.get(274)  # 274 is the EXIF orientation tag
+
+                if orientation and orientation != 1:
+                    # Orientation requires transformation
+                    img_fixed = ImageOps.exif_transpose(img)
+                    temp_path = self.output_dir / f"_temp_exif_{datetime.now().strftime('%Y%m%d_%H%M%S%f')}.jpg"
+
+                    # Convert to RGB if necessary
+                    if img_fixed.mode in ('RGBA', 'P'):
+                        img_fixed = img_fixed.convert('RGB')
+
+                    img_fixed.save(temp_path, format='JPEG', quality=95)
+                    logger.debug(f"Applied EXIF rotation (orientation={orientation}) to temp file")
+                    return temp_path, True
+
+        except Exception as e:
+            logger.warning(f"Failed to check/apply EXIF orientation: {e}")
+
+        return photo_path, False
+
     def compose_story(
         self,
         photo_path: Path,
@@ -394,49 +432,59 @@ class VideoComposer:
         else:
             output_path = Path(output_path)
 
-        # Determine duration
-        if duration is None:
-            music_duration = self._get_media_duration(music_path)
-            if music_duration and music_duration <= 60:
-                duration = music_duration
-            else:
-                duration = float(self.config.duration)
+        # Apply EXIF orientation (FFmpeg doesn't handle it reliably)
+        actual_photo_path, cleanup_temp = self._apply_exif_orientation(photo_path)
 
-        logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration:.2f}s, offset={music_offset:.2f}s)")
-
-        # Build FFmpeg command
-        if ken_burns:
-            cmd = self._build_ken_burns_command(
-                photo_path, music_path, output_path, duration, music_offset
-            )
-        else:
-            cmd = self._build_static_command(
-                photo_path, music_path, output_path, duration, music_offset
-            )
-
-        # Execute FFmpeg
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes max
-            )
+            # Determine duration
+            if duration is None:
+                music_duration = self._get_media_duration(music_path)
+                if music_duration and music_duration <= 60:
+                    duration = music_duration
+                else:
+                    duration = float(self.config.duration)
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
-                raise RuntimeError(f"FFmpeg failed: {result.stderr[:500]}")
+            logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration:.2f}s, offset={music_offset:.2f}s)")
 
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("FFmpeg timed out after 5 minutes")
+            # Build FFmpeg command
+            if ken_burns:
+                cmd = self._build_ken_burns_command(
+                    actual_photo_path, music_path, output_path, duration, music_offset
+                )
+            else:
+                cmd = self._build_static_command(
+                    actual_photo_path, music_path, output_path, duration, music_offset
+                )
 
-        if not output_path.exists():
-            raise RuntimeError(f"Output file was not created: {output_path}")
+            # Execute FFmpeg
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,  # 5 minutes max
+                )
 
-        file_size = output_path.stat().st_size / (1024 * 1024)  # MB
-        logger.info(f"Video created: {output_path.name} ({file_size:.1f} MB)")
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg error: {result.stderr}")
+                    raise RuntimeError(f"FFmpeg failed: {result.stderr[:500]}")
 
-        return output_path
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("FFmpeg timed out after 5 minutes")
+
+            if not output_path.exists():
+                raise RuntimeError(f"Output file was not created: {output_path}")
+
+            file_size = output_path.stat().st_size / (1024 * 1024)  # MB
+            logger.info(f"Video created: {output_path.name} ({file_size:.1f} MB)")
+
+            return output_path
+
+        finally:
+            # Clean up temp EXIF-corrected file if created
+            if cleanup_temp and actual_photo_path.exists():
+                actual_photo_path.unlink()
+                logger.debug(f"Cleaned up temp EXIF file: {actual_photo_path}")
 
     def compose_story_with_overlay(
         self,

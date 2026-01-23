@@ -291,6 +291,7 @@ def create_default_scheduler(
                     "text": story.text,
                     "photo_path": str(story.photo.path),
                     "angle": story.angle,
+                    "keywords": story.keywords,
                 }
                 for story in result.stories
             ]
@@ -307,6 +308,7 @@ def create_default_scheduler(
                 music_path=result.music.path,
                 ken_burns=result.ken_burns,
                 story_duration=result.story_duration,
+                category_id=result.topic.category_id,
                 prepared_result=result,
             )
 
