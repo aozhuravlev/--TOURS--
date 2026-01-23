@@ -291,7 +291,6 @@ def create_default_scheduler(
                     "text": story.text,
                     "photo_path": str(story.photo.path),
                     "angle": story.angle,
-                    "keywords": story.keywords,
                 }
                 for story in result.stories
             ]

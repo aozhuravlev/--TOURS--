@@ -39,7 +39,6 @@ class StoryItem:
     order: int           # 1, 2, 3...
     angle: str           # "intro", "how_to_eat", "where"...
     text: str            # Text for overlay
-    keywords: str        # English keywords for photo search
 
 
 @dataclass
@@ -146,7 +145,7 @@ def _validate_story_series_json(data: dict, expected_count: int) -> tuple[bool, 
         return False, "No stories in response"
 
     # Validate each story
-    required_fields = ["order", "text", "keywords"]
+    required_fields = ["order", "text"]
     for i, story in enumerate(stories):
         if not isinstance(story, dict):
             return False, f"Story {i + 1} must be an object"
@@ -155,9 +154,9 @@ def _validate_story_series_json(data: dict, expected_count: int) -> tuple[bool, 
             if field not in story:
                 return False, f"Story {i + 1} missing required field: {field}"
 
-        # Validate text length (max 80 chars as per prompt)
+        # Validate text length (100-200 chars target, allow tolerance up to 220)
         text = story.get("text", "")
-        if len(text) > 100:  # Allow some tolerance
+        if len(text) > 220:
             logger.warning(f"Story {i + 1} text too long ({len(text)} chars): {text[:50]}...")
 
         # Validate order
@@ -313,6 +312,14 @@ class TextGenerator:
         count = random.randint(min_count, max_count)
         logger.info(f"Generating story series: {count} stories for '{subtopic}'")
 
+        # Generate random target lengths for each story (100-200 chars)
+        target_lengths = [random.randint(100, 200) for _ in range(count)]
+        length_requirements = "\n".join(
+            f"- Сториз {i + 1}: около {length} символов"
+            for i, length in enumerate(target_lengths)
+        )
+        logger.debug(f"Target lengths: {target_lengths}")
+
         # Load prompt
         prompt_template = self._load_prompt("story_series_generator")
         if not prompt_template:
@@ -330,6 +337,7 @@ class TextGenerator:
             topic=topic,
             subtopic=subtopic,
             facts=facts or "Нет дополнительных фактов",
+            length_requirements=length_requirements,
         )
 
         # Call API
@@ -375,7 +383,6 @@ class TextGenerator:
                         order=item.get("order", len(stories) + 1),
                         angle=item.get("angle", "unknown"),
                         text=item.get("text", "").strip(),
-                        keywords=item.get("keywords", "").strip(),
                     ))
 
                 logger.info(f"Generated {len(stories)} stories successfully")

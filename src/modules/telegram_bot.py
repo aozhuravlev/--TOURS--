@@ -74,7 +74,6 @@ class PendingStoryForModeration:
     text: str
     photo_path: Path
     angle: str = ""
-    keywords: str = ""  # For result metadata
     status: str = "pending"  # "pending", "approved", "edited", "deleted"
     edited_text: Optional[str] = None
     message_id: Optional[int] = None
@@ -163,7 +162,6 @@ class ModerationBot:
                             "text": s.text,
                             "photo_path": str(s.photo_path),
                             "angle": s.angle,
-                            "keywords": s.keywords,
                             "status": s.status,
                             "edited_text": s.edited_text,
                             "message_id": s.message_id,
@@ -198,7 +196,6 @@ class ModerationBot:
                             text=s["text"],
                             photo_path=Path(s["photo_path"]),
                             angle=s.get("angle", ""),
-                            keywords=s.get("keywords", ""),
                             status=s.get("status", "pending"),
                             edited_text=s.get("edited_text"),
                             message_id=s.get("message_id"),
@@ -717,7 +714,6 @@ class ModerationBot:
                 order=s.order,
                 angle=s.angle,
                 text=s.text,
-                keywords=s.keywords,
                 photo=MediaFile(path=s.photo_path),
             )
             for s in series.stories
@@ -1132,7 +1128,6 @@ class ModerationBot:
                 text=s["text"],
                 photo_path=Path(s["photo_path"]),
                 angle=s.get("angle", ""),
-                keywords=s.get("keywords", ""),
                 status="pending",
             )
             for i, s in enumerate(stories)

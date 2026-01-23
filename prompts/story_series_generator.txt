@@ -8,25 +8,13 @@
 - Для мест: что это, как добраться, время работы, что посмотреть, лайфхак, история
 - Для транспорта: что это, как пользоваться, цены, где найти, лайфхак
 
-Требования к КАЖДОЙ сториз:
-- Текст: максимум 80 символов (очень коротко!)
-- Эмоционально и вовлекающе
-- Разговорный стиль
-- БЕЗ хештегов и эмодзи
-- keywords: 3-5 английских слов для поиска фото
+Требования к тексту каждой сториз:
+{length_requirements}
 
-КРИТИЧЕСКИ ВАЖНО для keywords (для поиска фото):
-- ТОЛЬКО 2-3 простых слова!
-- Используй грузинские термины где возможно: "khachapuri", "Georgian feast", "Adjarian"
-- НЕ добавляй "Batumi", "Georgia" (добавятся автоматически)
-- Примеры ХОРОШИХ keywords:
-  * "khachapuri" (не "khachapuri Adjarian boat shaped cheese")
-  * "Georgian feast" (не "Georgian supra feast table food")
-  * "autumn beach" (не "velvet season September beach sunny")
-  * "hotel lobby" (не "Georgian Lari hotel accommodation budget")
-  * "evening promenade" (не "Batumi Boulevard old town evening walk")
-  * "cable car mountains" (не "aerial tramway Adjara mountains scenic view")
-- keywords должны быть РАЗНЫМИ для каждой сториз!
+Общие требования:
+- Эмоционально и вовлекающе
+- Разговорный стиль, как будто пишет друг
+- Добавляй эмодзи для живости (1-3 на сториз)
 
 ВАЖНО:
 - Первая сториз — вступление/интрига
@@ -37,8 +25,8 @@
 Ответ строго в JSON формате:
 {{
   "stories": [
-    {{"order": 1, "angle": "intro", "text": "текст сториз", "keywords": "english keywords for photo"}},
-    {{"order": 2, "angle": "aspect_name", "text": "текст сториз", "keywords": "english keywords for photo"}},
+    {{"order": 1, "angle": "intro", "text": "текст сториз"}},
+    {{"order": 2, "angle": "aspect_name", "text": "текст сториз"}},
     ...
   ]
 }}

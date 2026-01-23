@@ -60,7 +60,6 @@ class StorySeriesItem:
     order: int
     angle: str
     text: str
-    keywords: str
     photo: MediaFile
     video_path: Path
 
@@ -71,7 +70,6 @@ class PreparedStory:
     order: int
     angle: str
     text: str
-    keywords: str
     photo: MediaFile
     # No video_path - video not rendered yet
 
@@ -372,14 +370,11 @@ class Orchestrator:
             photo_source = "local"
 
             if self.use_image_search and self.image_searcher:
-                # Use provided keywords or extract from text
-                keywords = story_item.keywords
-                if not keywords:
-                    keywords = self.text_generator.extract_english_keywords(
-                        russian_text=story_item.text,
-                        max_keywords=4,
-                    )
-
+                # Extract keywords from text for image search
+                keywords = self.text_generator.extract_english_keywords(
+                    russian_text=story_item.text,
+                    max_keywords=4,
+                )
                 if keywords:
                     logger.debug(f"    Keywords: {keywords}")
                     photo_path = self.image_searcher.search_by_description(
@@ -422,7 +417,6 @@ class Orchestrator:
                 "order": story_item.order,
                 "angle": story_item.angle,
                 "text": story_item.text,
-                "keywords": story_item.keywords,
                 "photo": photo,
             })
 
@@ -456,7 +450,6 @@ class Orchestrator:
                 order=sd["order"],
                 angle=sd["angle"],
                 text=sd["text"],
-                keywords=sd["keywords"],
                 photo=sd["photo"],
                 video_path=video_paths[i],
             ))
@@ -577,14 +570,11 @@ class Orchestrator:
             photo_source = "local"
 
             if self.use_image_search and self.image_searcher:
-                # Use provided keywords or extract from text
-                keywords = story_item.keywords
-                if not keywords:
-                    keywords = self.text_generator.extract_english_keywords(
-                        russian_text=story_item.text,
-                        max_keywords=4,
-                    )
-
+                # Extract keywords from text for image search
+                keywords = self.text_generator.extract_english_keywords(
+                    russian_text=story_item.text,
+                    max_keywords=4,
+                )
                 if keywords:
                     logger.debug(f"    Keywords: {keywords}")
                     photo_path = self.image_searcher.search_by_description(
@@ -627,7 +617,6 @@ class Orchestrator:
                 order=story_item.order,
                 angle=story_item.angle,
                 text=story_item.text,
-                keywords=story_item.keywords,
                 photo=photo,
             ))
 
@@ -714,7 +703,6 @@ class Orchestrator:
                 order=story_dict["order"],
                 angle=prepared_story.angle if prepared_story else "",
                 text=story_dict["text"],
-                keywords=prepared_story.keywords if prepared_story else "",
                 photo=MediaFile(
                     path=Path(story_dict["photo_path"]),
                     filename=Path(story_dict["photo_path"]).name,
