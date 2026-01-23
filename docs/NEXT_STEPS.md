@@ -219,6 +219,24 @@ WantedBy=multi-user.target
 ### ✅ Исправлен баг с публикацией
 - `get_pending_publications()` теперь возвращает контент со статусом "pending" И "approved"
 
+## Реализовано (2026-01-23)
+
+### ✅ Ротация шрифтов для визуального разнообразия
+- **20 шрифтов** из Google Fonts (OFL лицензия)
+- **Round-robin ротация:** каждая новая серия использует следующий шрифт
+- Категории шрифтов: sans-serif (8), serif (4), script (5), display (3)
+- Конфигурация в `config/fonts.py`
+- Индекс отслеживается в `content_history.json` → `font_rotation.last_index`
+- Один шрифт на всю серию (консистентность внутри серии)
+- Fallback: если шрифт не найден → следующий доступный → Montserrat-Bold
+
+**Установка шрифтов:**
+```bash
+python scripts/download_fonts.py           # Скачать все шрифты
+python scripts/download_fonts.py --list    # Показать порядок ротации
+python scripts/download_fonts.py --check   # Проверить какие отсутствуют
+```
+
 ---
 
 ## Phase 2 (Future)
@@ -240,4 +258,4 @@ WantedBy=multi-user.target
 
 ---
 
-*Обновлено: 2026-01-21*
+*Обновлено: 2026-01-23*

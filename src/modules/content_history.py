@@ -40,6 +40,7 @@ class ContentHistory:
     - Check if a subtopic/photo/music is available (not on cooldown)
     - Record new publications
     - Query publication history
+    - Track font rotation index for story series
     """
     history_path: Path
     subtopic_cooldown_days: int = 7
@@ -51,6 +52,7 @@ class ContentHistory:
     last_used_subtopics: dict[str, str] = field(default_factory=dict)  # subtopic -> date
     last_used_photos: dict[str, str] = field(default_factory=dict)  # path -> date
     last_used_music: dict[str, str] = field(default_factory=dict)  # path -> date
+    last_font_index: int = 0  # Round-robin font rotation index
 
     def __post_init__(self):
         """Load existing history from file."""
@@ -75,6 +77,9 @@ class ContentHistory:
             self.last_used_photos = data.get("last_used", {}).get("photos", {})
             self.last_used_music = data.get("last_used", {}).get("music", {})
 
+            # Load font rotation index (defaults to 0 for backward compatibility)
+            self.last_font_index = data.get("font_rotation", {}).get("last_index", 0)
+
             logger.info(f"Loaded {len(self.publications)} publications from history")
 
         except (json.JSONDecodeError, KeyError) as e:
@@ -92,6 +97,9 @@ class ContentHistory:
                 "subtopics": self.last_used_subtopics,
                 "photos": self.last_used_photos,
                 "music": self.last_used_music,
+            },
+            "font_rotation": {
+                "last_index": self.last_font_index,
             },
         }
 
@@ -324,6 +332,41 @@ class ContentHistory:
         """Get all publications awaiting moderation/publishing (pending or approved but not yet published)."""
         return [p for p in self.publications if p.status in ("pending", "approved")]
 
+    def get_current_font_index(self) -> int:
+        """
+        Get the current font index without incrementing.
+
+        Returns:
+            Current font rotation index
+        """
+        return self.last_font_index
+
+    def get_next_font_index(self, total_fonts: int) -> int:
+        """
+        Get next font index for round-robin rotation and save.
+
+        Increments the counter and wraps around when reaching total_fonts.
+        The index is saved immediately to ensure consistency across restarts.
+
+        Args:
+            total_fonts: Total number of fonts in rotation
+
+        Returns:
+            Font index to use (0 to total_fonts-1)
+        """
+        # Get current index
+        current = self.last_font_index
+
+        # Calculate next index (for next series)
+        next_index = (current + 1) % total_fonts
+
+        # Save new index
+        self.last_font_index = next_index
+        self.save()
+
+        logger.info(f"Font rotation: using index {current}, next will be {next_index}")
+        return current
+
     def get_stats(self) -> dict:
         """Get usage statistics."""
         total = len(self.publications)
@@ -344,4 +387,5 @@ class ContentHistory:
             "tracked_subtopics": len(self.last_used_subtopics),
             "tracked_photos": len(self.last_used_photos),
             "tracked_music": len(self.last_used_music),
+            "font_rotation_index": self.last_font_index,
         }

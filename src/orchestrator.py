@@ -21,7 +21,7 @@ from .modules.topic_selector import TopicSelector, SelectedTopic
 from .modules.news_fetcher import NewsFetcher, NewsResult
 from .modules.text_generator import TextGenerator, GeneratedText, GeneratedStorySeries as TextStorySeries, StoryItem
 from .modules.media_manager import MediaManager, MediaFile
-from .modules.video_composer import VideoComposer, VideoConfig
+from .modules.video_composer import VideoComposer, VideoConfig, TextOverlayConfig
 from .modules.content_history import ContentHistory, Publication
 from .modules.image_searcher import ImageSearcher
 
@@ -85,6 +85,7 @@ class PreparedStorySeriesResult:
     music: MediaFile
     ken_burns: bool = True
     story_duration: Optional[float] = None
+    font_path: Optional[Path] = None  # Font for text overlay (from rotation)
     created_at: datetime = field(default_factory=datetime.now)
     success: bool = True
     error: Optional[str] = None
@@ -348,6 +349,16 @@ class Orchestrator:
             return None
         logger.info(f"Selected music: {music.filename}")
 
+        # Step 4.5: Select font for this series (round-robin rotation)
+        text_config = None
+        font_count = self.video_composer.get_font_count()
+        if font_count > 0:
+            font_index = self.history.get_next_font_index(font_count)
+            font_path = self.video_composer.get_font_by_index(font_index)
+            if font_path:
+                text_config = TextOverlayConfig(font_path=font_path)
+                logger.info(f"Selected font: {font_path.name}")
+
         # Step 5: For each story, find photo and prepare data
         logger.info("Step 5: Finding photos for each story...")
         story_data = []
@@ -429,6 +440,7 @@ class Orchestrator:
                 music_path=music.path,
                 ken_burns=ken_burns,
                 story_duration=story_duration,
+                text_config=text_config,
             )
         except Exception as e:
             logger.error(f"Video composition failed: {e}")
@@ -543,6 +555,15 @@ class Orchestrator:
             return None
         logger.info(f"Selected music: {music.filename}")
 
+        # Step 4.5: Select font for this series (round-robin rotation)
+        font_path = None
+        font_count = self.video_composer.get_font_count()
+        if font_count > 0:
+            font_index = self.history.get_next_font_index(font_count)
+            font_path = self.video_composer.get_font_by_index(font_index)
+            if font_path:
+                logger.info(f"Selected font: {font_path.name}")
+
         # Step 5: For each story, find photo
         logger.info("Step 5: Finding photos for each story...")
         prepared_stories = []
@@ -619,6 +640,7 @@ class Orchestrator:
             music=music,
             ken_burns=ken_burns,
             story_duration=story_duration,
+            font_path=font_path,
             success=True,
         )
 
@@ -656,6 +678,12 @@ class Orchestrator:
             for s in approved_stories
         ]
 
+        # Create text config with font from rotation (if available)
+        text_config = None
+        if prepared.font_path:
+            text_config = TextOverlayConfig(font_path=prepared.font_path)
+            logger.info(f"Using font: {prepared.font_path.name}")
+
         # Render videos
         logger.info("Composing videos...")
         try:
@@ -664,6 +692,7 @@ class Orchestrator:
                 music_path=prepared.music.path,
                 ken_burns=prepared.ken_burns,
                 story_duration=prepared.story_duration,
+                text_config=text_config,
             )
         except Exception as e:
             logger.error(f"Video composition failed: {e}")

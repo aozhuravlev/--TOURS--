@@ -91,6 +91,7 @@ class PendingSeriesForModeration:
     ken_burns: bool
     story_duration: Optional[float]
     category_id: str = ""  # For history recording
+    font_path: Optional[Path] = None  # Font for text overlay (from rotation)
     prepared_result: any = None  # PreparedStorySeriesResult from orchestrator (not serialized)
 
 
@@ -155,6 +156,7 @@ class ModerationBot:
                     "music_path": str(series.music_path),
                     "ken_burns": series.ken_burns,
                     "story_duration": series.story_duration,
+                    "font_path": str(series.font_path) if series.font_path else None,
                     "stories": [
                         {
                             "order": s.order,
@@ -204,6 +206,10 @@ class ModerationBot:
                         for s in series_data["stories"]
                     ]
 
+                    # Load font_path if available
+                    font_path_str = series_data.get("font_path")
+                    font_path = Path(font_path_str) if font_path_str else None
+
                     self._pending_prepared_series[content_id] = PendingSeriesForModeration(
                         content_id=series_data["content_id"],
                         topic=series_data["topic"],
@@ -213,6 +219,7 @@ class ModerationBot:
                         ken_burns=series_data.get("ken_burns", True),
                         story_duration=series_data.get("story_duration"),
                         category_id=series_data.get("category_id", ""),
+                        font_path=font_path,
                         prepared_result=None,  # Reconstructed in _finish_moderation
                     )
 
@@ -723,6 +730,7 @@ class ModerationBot:
             music=music,
             ken_burns=series.ken_burns,
             story_duration=series.story_duration,
+            font_path=series.font_path,
             success=True,
         )
 
@@ -1089,6 +1097,7 @@ class ModerationBot:
         ken_burns: bool = True,
         story_duration: Optional[float] = None,
         category_id: str = "",
+        font_path: Optional[Path] = None,
         prepared_result: any = None,
     ) -> bool:
         """
@@ -1106,6 +1115,7 @@ class ModerationBot:
             ken_burns: Whether to use Ken Burns effect when rendering
             story_duration: Duration per story
             category_id: Category ID for history recording
+            font_path: Path to font file for text overlay (from rotation)
             prepared_result: PreparedStorySeriesResult from orchestrator
 
         Returns:
@@ -1138,6 +1148,7 @@ class ModerationBot:
             ken_burns=ken_burns,
             story_duration=story_duration,
             category_id=category_id,
+            font_path=font_path,
             prepared_result=prepared_result,
         )
 

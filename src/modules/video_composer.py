@@ -30,6 +30,13 @@ try:
 except ImportError:
     pass  # AVIF/HEIF support not available
 
+# Import font rotation config
+try:
+    from config.fonts import FONT_ROTATION, get_font_by_index as get_font_config, get_total_fonts
+    FONT_ROTATION_AVAILABLE = True
+except ImportError:
+    FONT_ROTATION_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -156,6 +163,101 @@ class VideoComposer:
             return ttf_files[0]
 
         return None
+
+    def get_available_fonts(self) -> list[Path]:
+        """
+        Get list of all available font files for rotation.
+
+        Returns:
+            List of paths to available font files (TTF/OTF)
+        """
+        if not self.fonts_dir.exists():
+            return []
+
+        # If font rotation config is available, use it to get ordered list
+        if FONT_ROTATION_AVAILABLE:
+            available = []
+            for font_config in FONT_ROTATION:
+                font_path = self.fonts_dir / font_config.filename
+                if font_path.exists():
+                    available.append(font_path)
+                else:
+                    # Try OTF variant for Inter
+                    otf_path = self.fonts_dir / font_config.filename.replace('.ttf', '.otf')
+                    if otf_path.exists():
+                        available.append(otf_path)
+            return available
+
+        # Fallback: return all TTF/OTF files
+        ttf_files = list(self.fonts_dir.glob("*.ttf"))
+        otf_files = list(self.fonts_dir.glob("*.otf"))
+        return sorted(ttf_files + otf_files)
+
+    def get_font_by_index(self, index: int) -> Optional[Path]:
+        """
+        Get font path by rotation index.
+
+        Uses the font rotation config to map index to font file.
+        Falls back to next available font if requested font is missing.
+
+        Args:
+            index: Font rotation index (0-based)
+
+        Returns:
+            Path to font file, or default font if not found
+        """
+        if not FONT_ROTATION_AVAILABLE:
+            logger.warning("Font rotation config not available, using default font")
+            return self._default_font
+
+        total = get_total_fonts()
+        wrapped_index = index % total
+
+        # Try to get the font at the requested index
+        font_config = get_font_config(wrapped_index)
+        font_path = self.fonts_dir / font_config.filename
+
+        # Handle OTF variant (Inter uses .otf)
+        if not font_path.exists():
+            otf_path = self.fonts_dir / font_config.filename.replace('.ttf', '.otf')
+            if otf_path.exists():
+                font_path = otf_path
+
+        if font_path.exists():
+            logger.info(f"Using font [{wrapped_index}]: {font_config.name}")
+            return font_path
+
+        # Font not found, try to find next available font
+        logger.warning(f"Font not found: {font_config.filename}, searching for fallback...")
+
+        for offset in range(1, total):
+            fallback_index = (wrapped_index + offset) % total
+            fallback_config = get_font_config(fallback_index)
+            fallback_path = self.fonts_dir / fallback_config.filename
+
+            if not fallback_path.exists():
+                otf_path = self.fonts_dir / fallback_config.filename.replace('.ttf', '.otf')
+                if otf_path.exists():
+                    fallback_path = otf_path
+
+            if fallback_path.exists():
+                logger.info(f"Fallback to font [{fallback_index}]: {fallback_config.name}")
+                return fallback_path
+
+        # Ultimate fallback to default
+        logger.warning("No rotation fonts available, using default font")
+        return self._default_font
+
+    def get_font_count(self) -> int:
+        """
+        Get total number of fonts in rotation.
+
+        Returns:
+            Number of fonts configured for rotation
+        """
+        if FONT_ROTATION_AVAILABLE:
+            return get_total_fonts()
+        return len(self.get_available_fonts())
 
     def _wrap_text(self, text: str, max_chars: int = 25) -> list[str]:
         """
@@ -774,6 +876,7 @@ class VideoComposer:
         story_duration: Optional[float] = None,
         min_duration: float = 5.0,
         max_duration: float = 8.0,
+        text_config: Optional[TextOverlayConfig] = None,
     ) -> list[Path]:
         """
         Create a series of story videos with continuous music.
@@ -791,6 +894,7 @@ class VideoComposer:
             story_duration: Fixed duration for all stories (None = random per story)
             min_duration: Minimum random duration (default: 5.0 seconds)
             max_duration: Maximum random duration (default: 8.0 seconds)
+            text_config: Optional text overlay config (with font from rotation)
 
         Returns:
             List of paths to created video files
@@ -845,6 +949,7 @@ class VideoComposer:
                     text=text,
                     duration=duration,
                     ken_burns=ken_burns,
+                    text_config=text_config,
                     music_offset=music_offset,
                 )
             else:

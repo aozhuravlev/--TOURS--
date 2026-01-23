@@ -213,6 +213,7 @@ def cmd_generate(args):
                             ken_burns=result.ken_burns,
                             story_duration=result.story_duration,
                             category_id=result.topic.category_id,
+                            font_path=result.font_path,
                             prepared_result=result,
                         )
                         # Keep bot running to handle callbacks
