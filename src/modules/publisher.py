@@ -327,7 +327,7 @@ class InstagramPublisher:
     def _wait_for_processing(
         self,
         container_id: str,
-        max_wait: int = 60,
+        max_wait: int = 180,
         poll_interval: int = 5,
     ) -> bool:
         """
