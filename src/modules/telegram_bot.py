@@ -170,6 +170,12 @@ class ModerationBot:
                     ],
                 }
 
+            # Also save editing state
+            data["__editing_story__"] = {
+                str(chat_id): [content_id, order]
+                for chat_id, (content_id, order) in self._editing_story.items()
+            }
+
             self._persistence_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self._persistence_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -189,6 +195,8 @@ class ModerationBot:
                 data = json.load(f)
 
             for content_id, series_data in data.items():
+                if content_id == "__editing_story__":
+                    continue  # Skip editing state, handle separately
                 if content_id not in self._pending_prepared_series:
                     stories = [
                         PendingStoryForModeration(
@@ -220,7 +228,13 @@ class ModerationBot:
                         prepared_result=None,  # Reconstructed in _finish_moderation
                     )
 
-            logger.debug(f"Loaded {len(data)} pending series from {self._persistence_file}")
+            # Load editing state
+            if "__editing_story__" in data:
+                for chat_id_str, (content_id, order) in data["__editing_story__"].items():
+                    self._editing_story[int(chat_id_str)] = (content_id, order)
+                logger.debug(f"Loaded {len(data['__editing_story__'])} editing states")
+
+            logger.debug(f"Loaded {len(data) - (1 if '__editing_story__' in data else 0)} pending series from {self._persistence_file}")
 
         except Exception as e:
             logger.error(f"Failed to load pending series: {e}")
@@ -687,6 +701,47 @@ class ModerationBot:
 
         logger.info(f"Story {order} deleted for {content_id}")
 
+    def _translate_path(self, path: Path) -> Path:
+        """
+        Translate absolute path to work in current environment.
+
+        Handles case where series was generated on host machine but
+        rendered in Docker container with different paths.
+        """
+        path_str = str(path)
+
+        # Known path patterns to translate
+        # Host: /home/alex/-=TOURS=-/media/... -> Docker: /app/media/...
+        # Host: /home/alex/-=TOURS=-/assets/... -> Docker: /app/assets/...
+        replacements = [
+            ("/home/alex/-=TOURS=-/", "/app/"),
+            ("/home/alex/tours-batumi-bot/", "/app/"),
+        ]
+
+        for old_prefix, new_prefix in replacements:
+            if path_str.startswith(old_prefix):
+                translated = Path(new_prefix + path_str[len(old_prefix):])
+                if translated.exists():
+                    logger.debug(f"Translated path: {path} -> {translated}")
+                    return translated
+
+        # If path exists as-is, use it
+        if path.exists():
+            return path
+
+        # Try relative path from current working directory
+        # Extract relative part (media/..., assets/...)
+        for marker in ["/media/", "/assets/", "/output/"]:
+            if marker in path_str:
+                idx = path_str.find(marker)
+                relative = Path(path_str[idx + 1:])  # Skip leading /
+                if relative.exists():
+                    logger.debug(f"Using relative path: {path} -> {relative}")
+                    return relative
+
+        # Return original path and let caller handle missing file
+        return path
+
     def _reconstruct_prepared_result(self, series: PendingSeriesForModeration):
         """
         Reconstruct PreparedStorySeriesResult from serialized data.
@@ -705,19 +760,25 @@ class ModerationBot:
             subtopic=series.subtopic,
         )
 
-        # Reconstruct music
-        music = MediaFile(path=series.music_path)
+        # Reconstruct music with path translation
+        music_path = self._translate_path(series.music_path)
+        music = MediaFile(path=music_path)
 
-        # Reconstruct prepared stories
+        # Reconstruct prepared stories with path translation
         prepared_stories = [
             PreparedStory(
                 order=s.order,
                 angle=s.angle,
                 text=s.text,
-                photo=MediaFile(path=s.photo_path),
+                photo=MediaFile(path=self._translate_path(s.photo_path)),
             )
             for s in series.stories
         ]
+
+        # Translate font path if present
+        font_path = None
+        if series.font_path:
+            font_path = self._translate_path(series.font_path)
 
         return PreparedStorySeriesResult(
             topic=topic,
@@ -726,7 +787,7 @@ class ModerationBot:
             music=music,
             ken_burns=series.ken_burns,
             story_duration=series.story_duration,
-            font_path=series.font_path,
+            font_path=font_path,
             success=True,
         )
 
@@ -1308,6 +1369,8 @@ class ModerationBot:
         """Start bot (non-blocking, for integration with other async code)."""
         if not self.app:
             self.build_app()
+        # Load persisted state (pending series and editing state)
+        self._load_pending_series()
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()

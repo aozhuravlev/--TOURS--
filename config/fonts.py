@@ -1,13 +1,14 @@
 """
 Font configuration for Instagram Stories text overlays.
 
-Defines 20 fonts for round-robin rotation across story series.
+Defines fonts for round-robin rotation across story series.
 All fonts are from Google Fonts with OFL (Open Font License).
+**All fonts support Cyrillic (Russian) text.**
 
 Font rotation ensures visual variety:
 - Each story series uses ONE font (consistency within series)
 - Next series uses the NEXT font in rotation (variety across series)
-- After 20 series, rotation cycles back to first font
+- After cycling through all fonts, rotation starts over
 """
 
 from dataclasses import dataclass
@@ -22,11 +23,11 @@ class FontConfig:
     url: str  # Download URL from Google Fonts GitHub
     category: str  # "sans-serif", "serif", "script", "display"
     weight: str = "Bold"  # Font weight
+    size_multiplier: float = 1.0  # Size adjustment (e.g., 1.5 for Caveat)
+    is_bold: bool = True  # If True, no background needed (shadow only)
 
 
-# 20 fonts for rotation, ordered for visual variety
-# Mix of categories to ensure diverse appearance
-# URLs verified and working as of 2026-01
+# 20 fonts with Cyrillic support - all already downloaded and verified
 FONT_ROTATION: list[FontConfig] = [
     # === Sans-serif fonts (modern, clean) ===
     FontConfig(
@@ -78,11 +79,10 @@ FONT_ROTATION: list[FontConfig] = [
         category="sans-serif",
     ),
     FontConfig(
-        name="Bebas Neue",
-        filename="BebasNeue-Regular.ttf",
-        url="https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf",
-        category="display",
-        weight="Regular",  # Bebas Neue only has Regular weight (already bold look)
+        name="Ubuntu",
+        filename="Ubuntu-Bold.ttf",
+        url="https://github.com/google/fonts/raw/main/ufl/ubuntu/Ubuntu-Bold.ttf",
+        category="sans-serif",
     ),
 
     # === Serif fonts (elegant, classic) ===
@@ -110,56 +110,61 @@ FONT_ROTATION: list[FontConfig] = [
         url="https://raw.githubusercontent.com/google/fonts/main/ofl/alice/Alice-Regular.ttf",
         category="serif",
         weight="Regular",
+        is_bold=False,  # Needs background
+    ),
+    FontConfig(
+        name="Cormorant",
+        filename="Cormorant-Bold.ttf",
+        url="https://github.com/CatharsisFonts/Cormorant/raw/master/fonts/ttf/Cormorant-Bold.ttf",
+        category="serif",
+    ),
+    FontConfig(
+        name="Philosopher",
+        filename="Philosopher-Bold.ttf",
+        url="https://github.com/google/fonts/raw/main/ofl/philosopher/Philosopher-Bold.ttf",
+        category="serif",
+    ),
+    FontConfig(
+        name="Forum",
+        filename="Forum-Regular.ttf",
+        url="https://github.com/google/fonts/raw/main/ofl/forum/Forum-Regular.ttf",
+        category="serif",
+        weight="Regular",
+        is_bold=False,  # Needs background
     ),
 
-    # === Script/Handwriting fonts (creative, personal) ===
-    FontConfig(
-        name="Shadows Into Light",
-        filename="ShadowsIntoLight.ttf",
-        url="https://raw.githubusercontent.com/google/fonts/main/ofl/shadowsintolight/ShadowsIntoLight.ttf",
-        category="script",
-        weight="Regular",
-    ),
-    FontConfig(
-        name="Pacifico",
-        filename="Pacifico-Regular.ttf",
-        url="https://github.com/googlefonts/Pacifico/raw/main/fonts/ttf/Pacifico-Regular.ttf",
-        category="script",
-        weight="Regular",
-    ),
+    # === Script/Handwriting fonts with Cyrillic ===
     FontConfig(
         name="Caveat",
         filename="Caveat-Bold.ttf",
         url="https://github.com/googlefonts/caveat/raw/main/fonts/ttf/Caveat-Bold.ttf",
         category="script",
+        size_multiplier=1.5,  # Script font needs larger size
     ),
     FontConfig(
-        name="Great Vibes",
-        filename="GreatVibes-Regular.ttf",
-        url="https://github.com/google/fonts/raw/main/ofl/greatvibes/GreatVibes-Regular.ttf",
+        name="Marck Script",
+        filename="MarckScript-Regular.ttf",
+        url="https://github.com/google/fonts/raw/main/ofl/marckscript/MarckScript-Regular.ttf",
         category="script",
         weight="Regular",
+        size_multiplier=1.3,  # Script font
+        is_bold=False,  # Needs background
     ),
     FontConfig(
-        name="Architects Daughter",
-        filename="ArchitectsDaughter-Regular.ttf",
-        url="https://raw.githubusercontent.com/google/fonts/main/ofl/architectsdaughter/ArchitectsDaughter-Regular.ttf",
+        name="Bad Script",
+        filename="BadScript-Regular.ttf",
+        url="https://github.com/google/fonts/raw/main/ofl/badscript/BadScript-Regular.ttf",
         category="script",
         weight="Regular",
+        size_multiplier=1.3,  # Script font
+        is_bold=False,  # Needs background
     ),
 
-    # === Display fonts (decorative, eye-catching) ===
+    # === Display fonts with Cyrillic ===
     FontConfig(
         name="Lobster",
         filename="Lobster-Regular.ttf",
         url="https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf",
-        category="display",
-        weight="Regular",
-    ),
-    FontConfig(
-        name="Righteous",
-        filename="Righteous-Regular.ttf",
-        url="https://raw.githubusercontent.com/google/fonts/main/ofl/righteous/Righteous-Regular.ttf",
         category="display",
         weight="Regular",
     ),
@@ -192,15 +197,3 @@ def get_total_fonts() -> int:
 def get_fonts_by_category(category: str) -> list[FontConfig]:
     """Get all fonts of a specific category."""
     return [f for f in FONT_ROTATION if f.category == category]
-
-
-# Legacy font list for backward compatibility with existing download script
-FONT_FILES_LEGACY = {
-    "Montserrat-Bold.ttf": "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf",
-    "Montserrat-SemiBold.ttf": "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-SemiBold.ttf",
-    "Montserrat-Medium.ttf": "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Medium.ttf",
-    "Montserrat-Regular.ttf": "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Regular.ttf",
-    "OpenSans-Bold.ttf": "https://github.com/googlefonts/opensans/raw/main/fonts/ttf/OpenSans-Bold.ttf",
-    "OpenSans-SemiBold.ttf": "https://github.com/googlefonts/opensans/raw/main/fonts/ttf/OpenSans-SemiBold.ttf",
-    "OpenSans-Regular.ttf": "https://github.com/googlefonts/opensans/raw/main/fonts/ttf/OpenSans-Regular.ttf",
-}

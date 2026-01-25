@@ -23,6 +23,13 @@ from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+# Import imagetext-py for emoji support
+try:
+    from imagetext_py import FontDB, Writer, Paint, EmojiOptions
+    IMAGETEXT_AVAILABLE = True
+except ImportError:
+    IMAGETEXT_AVAILABLE = False
+
 # Enable AVIF/HEIF support
 try:
     import pillow_heif
@@ -65,20 +72,40 @@ def _get_ffmpeg_path() -> str:
         )
 
 
+# Instagram safe zones (pixels from edge)
+SAFE_TOP = 250      # Status bar + profile header
+SAFE_BOTTOM = 250   # Swipe up / reply area
+SAFE_SIDE = 100     # Left/right margins
+
+# Position variations for text
+TEXT_POSITIONS = [
+    ("bottom", "center"),
+    ("bottom", "left"),
+    ("bottom", "right"),
+    ("top", "center"),
+    ("top", "left"),
+    ("top", "right"),
+]
+
+
 @dataclass
 class TextOverlayConfig:
     """Text overlay settings for Stories."""
     font_path: Optional[Path] = None  # Path to .ttf font file
-    font_size: int = 48  # Base font size in pixels
+    font_size: int = 45  # Base font size in pixels
     font_color: str = "white"
     background_color: str = "black"
     background_opacity: float = 0.6  # 0.0 - 1.0
     padding: int = 20  # Padding around text
-    shadow_offset: int = 2  # Shadow offset in pixels
+    shadow_offset: int = 3  # Shadow offset in pixels
     shadow_color: str = "black"
-    max_width_chars: int = 25  # Max characters per line before wrap
-    position_y: int = 800  # Y position from top (in safe zone)
-    line_spacing: int = 10  # Space between lines
+    max_width_chars: int = 32  # Max characters per line before wrap
+    line_spacing: int = 1  # Space between lines (imagetext-py multiplier)
+    emoji_font_path: Optional[Path] = None  # Fallback font for emoji
+    # Per-story variations
+    position: tuple = ("bottom", "center")  # (vertical, horizontal)
+    use_background: bool = True  # If False, only shadow (for bold fonts)
+    size_multiplier: float = 1.0  # Font size adjustment
 
 
 @dataclass
@@ -132,9 +159,14 @@ class VideoComposer:
         # Find default font
         self._default_font = self._find_default_font()
 
+        # Find emoji font for fallback
+        self._emoji_font = self._find_emoji_font()
+
         logger.info(f"Using FFmpeg: {self.ffmpeg_path}")
         if self._default_font:
             logger.info(f"Default font: {self._default_font.name}")
+        if self._emoji_font:
+            logger.info(f"Emoji font: {self._emoji_font.name}")
 
     def _find_default_font(self) -> Optional[Path]:
         """Find a suitable default font for text overlays."""
@@ -163,6 +195,141 @@ class VideoComposer:
             return ttf_files[0]
 
         return None
+
+    def _find_emoji_font(self) -> Optional[Path]:
+        """Find emoji font for fallback rendering."""
+        if not self.fonts_dir.exists():
+            return None
+
+        # Emoji font names
+        emoji_fonts = [
+            "NotoEmoji-Regular.ttf",
+            "NotoColorEmoji.ttf",
+            "NotoEmoji-Bold.ttf",
+        ]
+
+        for font_name in emoji_fonts:
+            font_path = self.fonts_dir / font_name
+            if font_path.exists():
+                return font_path
+
+        return None
+
+    def _is_emoji(self, char: str) -> bool:
+        """Check if character is an emoji."""
+        code = ord(char)
+        # Emoji ranges (simplified)
+        emoji_ranges = [
+            (0x1F600, 0x1F64F),  # Emoticons
+            (0x1F300, 0x1F5FF),  # Misc Symbols and Pictographs
+            (0x1F680, 0x1F6FF),  # Transport and Map
+            (0x1F1E0, 0x1F1FF),  # Flags
+            (0x2600, 0x26FF),    # Misc symbols
+            (0x2700, 0x27BF),    # Dingbats
+            (0xFE00, 0xFE0F),    # Variation Selectors
+            (0x1F900, 0x1F9FF),  # Supplemental Symbols
+            (0x1FA00, 0x1FA6F),  # Chess Symbols
+            (0x1FA70, 0x1FAFF),  # Symbols Extended-A
+            (0x231A, 0x231B),    # Watch, Hourglass
+            (0x23E9, 0x23F3),    # AV symbols
+            (0x23F8, 0x23FA),    # AV symbols
+            (0x25AA, 0x25AB),    # Squares
+            (0x25B6, 0x25B6),    # Play button
+            (0x25C0, 0x25C0),    # Reverse button
+            (0x25FB, 0x25FE),    # Squares
+            (0x2614, 0x2615),    # Umbrella, Hot beverage
+            (0x2648, 0x2653),    # Zodiac
+            (0x267F, 0x267F),    # Wheelchair
+            (0x2693, 0x2693),    # Anchor
+            (0x26A1, 0x26A1),    # High voltage
+            (0x26AA, 0x26AB),    # Circles
+            (0x26BD, 0x26BE),    # Soccer, Baseball
+            (0x26C4, 0x26C5),    # Snowman, Sun
+            (0x26CE, 0x26CE),    # Ophiuchus
+            (0x26D4, 0x26D4),    # No entry
+            (0x26EA, 0x26EA),    # Church
+            (0x26F2, 0x26F3),    # Fountain, Golf
+            (0x26F5, 0x26F5),    # Sailboat
+            (0x26FA, 0x26FA),    # Tent
+            (0x26FD, 0x26FD),    # Fuel pump
+            (0x2702, 0x2702),    # Scissors
+            (0x2705, 0x2705),    # Check mark
+            (0x2708, 0x270D),    # Airplane to Writing hand
+            (0x270F, 0x270F),    # Pencil
+            (0x2712, 0x2712),    # Black nib
+            (0x2714, 0x2714),    # Check mark
+            (0x2716, 0x2716),    # X mark
+            (0x271D, 0x271D),    # Cross
+            (0x2721, 0x2721),    # Star of David
+            (0x2728, 0x2728),    # Sparkles
+            (0x2733, 0x2734),    # Eight spoked asterisk
+            (0x2744, 0x2744),    # Snowflake
+            (0x2747, 0x2747),    # Sparkle
+            (0x274C, 0x274C),    # Cross mark
+            (0x274E, 0x274E),    # Cross mark
+            (0x2753, 0x2755),    # Question marks
+            (0x2757, 0x2757),    # Exclamation
+            (0x2763, 0x2764),    # Heart exclamation, Heart
+            (0x2795, 0x2797),    # Plus, Minus, Divide
+            (0x27A1, 0x27A1),    # Right arrow
+            (0x27B0, 0x27B0),    # Curly loop
+            (0x27BF, 0x27BF),    # Double curly loop
+            (0x2934, 0x2935),    # Arrows
+            (0x2B05, 0x2B07),    # Arrows
+            (0x2B1B, 0x2B1C),    # Squares
+            (0x2B50, 0x2B50),    # Star
+            (0x2B55, 0x2B55),    # Circle
+            (0x3030, 0x3030),    # Wavy dash
+            (0x303D, 0x303D),    # Part alternation mark
+            (0x3297, 0x3297),    # Circled Ideograph Congratulation
+            (0x3299, 0x3299),    # Circled Ideograph Secret
+        ]
+        return any(start <= code <= end for start, end in emoji_ranges)
+
+    def _has_emoji(self, text: str) -> bool:
+        """Check if text contains any emoji."""
+        return any(self._is_emoji(c) for c in text)
+
+    def _strip_emoji(self, text: str) -> str:
+        """Remove emoji from text (for fonts that don't support emoji)."""
+        return ''.join(c for c in text if not self._is_emoji(c))
+
+    def _calc_line_width(self, draw, line: str, font, emoji_font) -> int:
+        """Calculate line width accounting for emoji with different font."""
+        if not emoji_font or not self._has_emoji(line):
+            bbox = draw.textbbox((0, 0), line, font=font)
+            return bbox[2] - bbox[0]
+
+        # Calculate width character by character
+        total_width = 0
+        for char in line:
+            char_font = emoji_font if self._is_emoji(char) else font
+            bbox = draw.textbbox((0, 0), char, font=char_font)
+            total_width += bbox[2] - bbox[0]
+        return total_width
+
+    def _draw_text_with_emoji(
+        self,
+        draw,
+        x: int,
+        y: int,
+        line: str,
+        font,
+        emoji_font,
+        fill: str,
+    ) -> None:
+        """Draw text line with emoji support using fallback font."""
+        if not emoji_font or not self._has_emoji(line):
+            draw.text((x, y), line, font=font, fill=fill)
+            return
+
+        # Draw character by character
+        current_x = x
+        for char in line:
+            char_font = emoji_font if self._is_emoji(char) else font
+            draw.text((current_x, y), char, font=char_font, fill=fill)
+            bbox = draw.textbbox((0, 0), char, font=char_font)
+            current_x += bbox[2] - bbox[0]
 
     def get_available_fonts(self) -> list[Path]:
         """
@@ -295,10 +462,7 @@ class VideoComposer:
         text_config: "TextOverlayConfig",
     ) -> Path:
         """
-        Add text overlay to image using PIL/Pillow.
-
-        This is more reliable than FFmpeg drawtext as it doesn't depend
-        on FFmpeg compile options.
+        Add text overlay to image using imagetext-py (with emoji support) or PIL.
 
         Args:
             image_path: Path to source image
@@ -335,21 +499,153 @@ class VideoComposer:
         if img.mode != "RGBA":
             img = img.convert("RGBA")
 
-        # Create drawing context
+        # Wrap text into lines
+        lines = self._wrap_text(text, cfg.max_width_chars)
+        wrapped_text = "\n".join(lines)
+
+        # Get font path
+        font_path = cfg.font_path or self._default_font
+
+        # Use imagetext-py if available (for emoji support)
+        if IMAGETEXT_AVAILABLE:
+            img = self._render_text_with_imagetext(
+                img, wrapped_text, font_path, cfg, target_w, target_h
+            )
+        else:
+            img = self._render_text_with_pil(
+                img, lines, font_path, cfg, target_w, target_h
+            )
+
+        # Save as RGB (JPEG doesn't support alpha)
+        img_rgb = img.convert("RGB")
+        img_rgb.save(output_path, "JPEG", quality=95)
+
+        logger.debug(f"Created image with text overlay: {output_path}")
+        return output_path
+
+    def _render_text_with_imagetext(
+        self,
+        img: Image.Image,
+        text: str,
+        font_path: Path,
+        cfg: "TextOverlayConfig",
+        target_w: int,
+        target_h: int,
+    ) -> Image.Image:
+        """Render text with emoji support using imagetext-py."""
+        from imagetext_py import FontDB, Paint, EmojiOptions, text_size_multiline, draw_text_multiline, Canvas
+
+        # Register font
+        font_name = f"font_{font_path.stem}"
+        FontDB.LoadFromPath(font_name, str(font_path))
+        FontDB.SetDefaultEmojiOptions(EmojiOptions())
+        font = FontDB.Query(font_name)
+
+        # Split text into lines for imagetext-py
+        lines = text.split('\n')
+
+        # Calculate actual font size with multiplier
+        actual_font_size = int(cfg.font_size * cfg.size_multiplier)
+
+        # Calculate text dimensions
+        text_w, text_h = text_size_multiline(
+            lines, actual_font_size, font,
+            line_spacing=cfg.line_spacing,
+            draw_emojis=True,
+        )
+
+        # Calculate position based on cfg.position
+        vertical, horizontal = cfg.position
+        padding = cfg.padding
+
+        # Vertical position (respecting Instagram safe zones)
+        if vertical == "top":
+            start_y = SAFE_TOP + padding
+        else:  # bottom
+            start_y = target_h - SAFE_BOTTOM - text_h - padding
+
+        # Horizontal position
+        if horizontal == "left":
+            start_x = SAFE_SIDE
+        elif horizontal == "right":
+            start_x = target_w - text_w - SAFE_SIDE
+        else:  # center
+            start_x = (target_w - text_w) // 2
+
+        # Draw background only if use_background is True (for non-bold fonts)
+        if cfg.use_background:
+            bg_left = start_x - padding
+            bg_top = start_y - padding
+            bg_right = start_x + text_w + padding
+            bg_bottom = start_y + text_h + padding
+
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            overlay_draw = ImageDraw.Draw(overlay)
+            bg_opacity = int(cfg.background_opacity * 255)
+            overlay_draw.rounded_rectangle(
+                [bg_left, bg_top, bg_right, bg_bottom],
+                radius=10,
+                fill=(0, 0, 0, bg_opacity),
+            )
+            img = Image.alpha_composite(img, overlay)
+
+        # Convert PIL Image to imagetext-py Canvas
+        canvas = Canvas.from_image(img)
+
+        # Draw shadow (always, for readability)
+        shadow_offset = cfg.shadow_offset if cfg.use_background else cfg.shadow_offset + 1
+        if shadow_offset > 0:
+            draw_text_multiline(
+                canvas, lines,
+                start_x + shadow_offset, start_y + shadow_offset,
+                0, 0, text_w, actual_font_size, font,
+                Paint.Color((0, 0, 0, 200)),  # Semi-transparent shadow
+                line_spacing=cfg.line_spacing,
+                draw_emojis=True,
+            )
+
+        # Draw main text
+        draw_text_multiline(
+            canvas, lines,
+            start_x, start_y,
+            0, 0, text_w, actual_font_size, font,
+            Paint.Color((255, 255, 255, 255)),
+            line_spacing=cfg.line_spacing,
+            draw_emojis=True,
+        )
+
+        # Convert back to PIL Image
+        result_img = canvas.to_image()
+
+        logger.debug(f"Rendered text: pos={cfg.position}, bg={cfg.use_background}, size={actual_font_size}")
+        return result_img
+
+    def _render_text_with_pil(
+        self,
+        img: Image.Image,
+        lines: list[str],
+        font_path: Path,
+        cfg: "TextOverlayConfig",
+        target_w: int,
+        target_h: int,
+    ) -> Image.Image:
+        """Render text using PIL (fallback without emoji support)."""
         draw = ImageDraw.Draw(img)
 
         # Load font
-        font_path = cfg.font_path or self._default_font
         try:
             font = ImageFont.truetype(str(font_path), cfg.font_size)
         except Exception as e:
             logger.warning(f"Failed to load font {font_path}: {e}")
             font = ImageFont.load_default()
 
-        # Wrap text into lines
-        lines = self._wrap_text(text, cfg.max_width_chars)
+        # Strip emoji if present (PIL can't render them)
+        text = "\n".join(lines)
+        if self._has_emoji(text):
+            lines = [self._strip_emoji(line) for line in lines]
+            logger.warning("Stripped emoji from text (imagetext-py not available)")
 
-        # Calculate text block dimensions
+        # Calculate text dimensions
         line_heights = []
         line_widths = []
         for line in lines:
@@ -361,62 +657,45 @@ class VideoComposer:
         total_height = len(lines) * (line_height + cfg.line_spacing)
         max_width = max(line_widths) if line_widths else 0
 
-        # Position: bottom of safe zone (above Instagram UI)
-        # Safe zone: 250px from top, 340px from bottom
-        # Text positioned at bottom of safe zone with margin
-        safe_zone_bottom = target_h - 340  # 1580px
-        bottom_margin = 40  # Extra margin from safe zone edge
+        # Position: bottom of safe zone
+        safe_zone_bottom = target_h - 340
+        bottom_margin = 40
         start_y = safe_zone_bottom - total_height - bottom_margin
 
-        # Draw background rectangle
+        # Draw background
         padding = cfg.padding
         bg_left = (target_w - max_width) // 2 - padding
         bg_top = start_y - padding
         bg_right = (target_w + max_width) // 2 + padding
         bg_bottom = start_y + total_height + padding
 
-        # Create semi-transparent overlay
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         overlay_draw = ImageDraw.Draw(overlay)
-
-        # Parse background color and opacity
         bg_opacity = int(cfg.background_opacity * 255)
         overlay_draw.rounded_rectangle(
             [bg_left, bg_top, bg_right, bg_bottom],
             radius=10,
             fill=(0, 0, 0, bg_opacity),
         )
-
-        # Composite overlay onto image
         img = Image.alpha_composite(img, overlay)
         draw = ImageDraw.Draw(img)
 
-        # Draw text lines
+        # Draw text
         y = start_y
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font)
             text_width = bbox[2] - bbox[0]
             x = (target_w - text_width) // 2
 
-            # Draw shadow
             if cfg.shadow_offset > 0:
                 draw.text(
                     (x + cfg.shadow_offset, y + cfg.shadow_offset),
-                    line,
-                    font=font,
-                    fill=cfg.shadow_color,
+                    line, font=font, fill=cfg.shadow_color
                 )
-
-            # Draw text
             draw.text((x, y), line, font=font, fill=cfg.font_color)
             y += line_height + cfg.line_spacing
 
-        # Save as RGB (JPEG doesn't support alpha)
-        img_rgb = img.convert("RGB")
-        img_rgb.save(output_path, "JPEG", quality=95)
-
-        logger.debug(f"Created image with text overlay: {output_path}")
-        return output_path
+        return img
 
     def _get_media_duration(self, media_path: Path) -> Optional[float]:
         """
@@ -928,6 +1207,15 @@ class VideoComposer:
         video_paths = []
         music_offset = 0.0
 
+        # Get available fonts for per-story variation
+        available_fonts = self.get_available_fonts()
+        font_configs = []
+        if FONT_ROTATION_AVAILABLE:
+            for font_config in FONT_ROTATION:
+                font_path = self.fonts_dir / font_config.filename
+                if font_path.exists():
+                    font_configs.append((font_path, font_config))
+
         for i, story in enumerate(stories):
             photo_path = Path(story["photo_path"])
             text = story.get("text", "")
@@ -937,10 +1225,29 @@ class VideoComposer:
             if music_offset + duration > music_duration:
                 music_offset = music_offset % music_duration
 
-            logger.info(
-                f"Composing story {i + 1}/{len(stories)}: "
-                f"duration={duration:.2f}s, music_offset={music_offset:.2f}s"
-            )
+            # Create per-story text config with random font and position
+            story_text_config = text_config
+            if text and font_configs:
+                # Random font for this story
+                font_path, font_cfg = random.choice(font_configs)
+                # Random position for this story
+                position = random.choice(TEXT_POSITIONS)
+
+                story_text_config = TextOverlayConfig(
+                    font_path=font_path,
+                    position=position,
+                    use_background=not font_cfg.is_bold,  # Bold fonts don't need bg
+                    size_multiplier=font_cfg.size_multiplier,
+                )
+                logger.info(
+                    f"Composing story {i + 1}/{len(stories)}: "
+                    f"font={font_cfg.name}, pos={position}, bg={not font_cfg.is_bold}"
+                )
+            else:
+                logger.info(
+                    f"Composing story {i + 1}/{len(stories)}: "
+                    f"duration={duration:.2f}s, music_offset={music_offset:.2f}s"
+                )
 
             if text:
                 video_path = self.compose_story_with_overlay(
@@ -949,7 +1256,7 @@ class VideoComposer:
                     text=text,
                     duration=duration,
                     ken_burns=ken_burns,
-                    text_config=text_config,
+                    text_config=story_text_config,
                     music_offset=music_offset,
                 )
             else:

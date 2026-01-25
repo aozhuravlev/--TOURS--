@@ -194,7 +194,6 @@ def cmd_generate(args):
                             "text": s.text,
                             "photo_path": str(s.photo.path),
                             "angle": s.angle,
-                            "keywords": s.keywords,
                         }
                         for s in result.stories
                     ]
