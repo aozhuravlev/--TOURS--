@@ -13,8 +13,6 @@ services:
 
     environment:
       - TZ=Europe/Moscow
-      # Override SSH key path for container
-      - MEDIA_SSH_KEY=/app/.ssh/key.pem
 
     volumes:
       # Persistent data (read-write)
@@ -24,10 +22,6 @@ services:
 
       # Media library (read-only, updated by host)
       - ./media:/app/media:ro
-
-      # SSH key for media upload (read-only)
-      # Local path - change for production server
-      - ${SSH_KEY_PATH:-/home/alex/-=TRANSLATOR=-/.ssh/zomro.pem}:/app/.ssh/key.pem:ro
 
     # Healthcheck: verify app data directory is accessible
     healthcheck:

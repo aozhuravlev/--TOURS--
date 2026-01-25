@@ -1204,14 +1204,18 @@ class ModerationBot:
             logger.error(f"Failed to send prepared series: {e}")
             return False
 
-    async def send_render_complete_notification(
+    async def send_videos_for_manual_publish(
         self,
         subtopic: str,
         story_count: int,
         video_paths: list[Path],
     ) -> bool:
         """
-        Send notification that video rendering is complete.
+        Send ready videos to moderator for manual Instagram publishing.
+
+        1. Send header with topic info
+        2. Send each video with numbering
+        3. Delete video files after successful sending
 
         Args:
             subtopic: Topic name
@@ -1219,86 +1223,79 @@ class ModerationBot:
             video_paths: List of video file paths
 
         Returns:
-            True if notification sent successfully
+            True if all videos sent successfully
         """
         if not self.app:
             logger.error("Bot app not initialized. Call build_app() first.")
             return False
 
-        message = (
-            f"🎬 ВИДЕО ГОТОВЫ\n\n"
-            f"Тема: {subtopic}\n"
-            f"Историй: {story_count}\n\n"
-            f"Видео сохранены и готовы к публикации."
-        )
-
         try:
-            await self.app.bot.send_message(
-                chat_id=self.moderator_chat_id,
-                text=message,
+            bot = self.app.bot
+
+            # Send header
+            header = (
+                f"📱 ГОТОВО К ПУБЛИКАЦИИ\n\n"
+                f"Тема: {subtopic}\n"
+                f"Видео: {story_count} шт.\n\n"
+                f"Отправляю видео..."
             )
-            logger.info(f"Sent render complete notification: {subtopic}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send render notification: {e}")
-            return False
-
-    async def send_publish_notification(
-        self,
-        subtopic: str,
-        published: int,
-        total: int,
-        media_ids: list[str],
-    ) -> bool:
-        """
-        Send notification about successful story publication.
-
-        Args:
-            subtopic: Topic name that was published
-            published: Number of successfully published stories
-            total: Total number of stories attempted
-            media_ids: List of Instagram media IDs
-
-        Returns:
-            True if notification sent successfully
-        """
-        if not self.app:
-            logger.error("Bot app not initialized. Call build_app() first.")
-            return False
-
-        # Format media IDs (truncate if too long)
-        if media_ids:
-            ids_str = ", ".join(media_ids[:3])
-            if len(media_ids) > 3:
-                ids_str += f"... (+{len(media_ids) - 3})"
-        else:
-            ids_str = "-"
-
-        # Build message
-        if published == total:
-            status = "✅ ОПУБЛИКОВАНО"
-        elif published > 0:
-            status = "⚠️ ЧАСТИЧНО ОПУБЛИКОВАНО"
-        else:
-            status = "❌ ОШИБКА ПУБЛИКАЦИИ"
-
-        message = (
-            f"{status}\n\n"
-            f"Тема: {subtopic}\n"
-            f"Историй: {published}/{total}\n"
-            f"ID: {ids_str}"
-        )
-
-        try:
-            await self.app.bot.send_message(
+            await bot.send_message(
                 chat_id=self.moderator_chat_id,
-                text=message,
+                text=header,
             )
-            logger.info(f"Sent publish notification: {subtopic} ({published}/{total})")
-            return True
+
+            # Send each video with numbering
+            sent_count = 0
+            for i, video_path in enumerate(video_paths, 1):
+                if video_path.exists():
+                    caption = f"#{i}/{len(video_paths)}"
+                    with open(video_path, "rb") as video_file:
+                        await bot.send_video(
+                            chat_id=self.moderator_chat_id,
+                            video=video_file,
+                            caption=caption,
+                        )
+                    sent_count += 1
+                    logger.info(f"Sent video {i}/{len(video_paths)}: {video_path.name}")
+                else:
+                    logger.warning(f"Video not found: {video_path}")
+
+            # Send completion message
+            if sent_count == len(video_paths):
+                completion_msg = (
+                    f"✅ Все {sent_count} видео отправлены!\n\n"
+                    f"Опубликуйте видео в Instagram Stories по порядку."
+                )
+            else:
+                completion_msg = (
+                    f"⚠️ Отправлено {sent_count}/{len(video_paths)} видео.\n\n"
+                    f"Опубликуйте видео в Instagram Stories по порядку."
+                )
+
+            await bot.send_message(
+                chat_id=self.moderator_chat_id,
+                text=completion_msg,
+            )
+
+            # Delete video files after successful sending
+            if sent_count > 0:
+                deleted_count = 0
+                for video_path in video_paths:
+                    if video_path.exists():
+                        try:
+                            video_path.unlink()
+                            deleted_count += 1
+                            logger.info(f"Deleted video: {video_path.name}")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete {video_path.name}: {e}")
+
+                logger.info(f"Deleted {deleted_count} video files after sending")
+
+            logger.info(f"Sent {sent_count} videos for manual publish: {subtopic}")
+            return sent_count == len(video_paths)
 
         except Exception as e:
-            logger.error(f"Failed to send publish notification: {e}")
+            logger.error(f"Failed to send videos for manual publish: {e}")
             return False
 
     def run_polling(self):

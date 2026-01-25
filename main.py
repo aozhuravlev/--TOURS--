@@ -104,7 +104,7 @@ def create_telegram_bot(orchestrator: Orchestrator) -> ModerationBot:
                 break
 
     async def on_finish_moderation(content_id: str, approved_stories: list, prepared_result):
-        """Called when moderation is finished - render videos and notify."""
+        """Called when moderation is finished - render videos and send to moderator."""
         logger.info(f"Moderation finished for {content_id}: {len(approved_stories)} stories approved")
 
         if not approved_stories:
@@ -117,9 +117,9 @@ def create_telegram_bot(orchestrator: Orchestrator) -> ModerationBot:
         if result and result.success:
             logger.info(f"Rendered {result.story_count} videos for {result.topic.subtopic}")
 
-            # Notify moderator that rendering is complete
+            # Send videos to moderator for manual Instagram publishing
             if bot_ref[0]:
-                await bot_ref[0].send_render_complete_notification(
+                await bot_ref[0].send_videos_for_manual_publish(
                     subtopic=result.topic.subtopic,
                     story_count=result.story_count,
                     video_paths=result.video_paths,
@@ -385,58 +385,17 @@ async def cmd_run(args):
     orchestrator = create_orchestrator()
     bot = create_telegram_bot(orchestrator)
 
-    # Create publisher and uploader (optional)
-    publisher = None
-    media_uploader = None
-
-    ig_token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
-    ig_account_id = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID")
-
-    if ig_token and ig_account_id:
-        from src.modules.publisher import InstagramPublisher
-        publisher = InstagramPublisher(
-            access_token=ig_token,
-            instagram_account_id=ig_account_id,
-        )
-        logger.info("Instagram publisher configured")
-
-        # Create media uploader for hosting videos
-        ssh_host = os.getenv("MEDIA_SSH_HOST")
-        ssh_user = os.getenv("MEDIA_SSH_USER")
-        ssh_key = os.getenv("MEDIA_SSH_KEY")
-        public_url = os.getenv("MEDIA_PUBLIC_URL")
-
-        if ssh_host and ssh_user and ssh_key and public_url:
-            from src.modules.media_uploader import MediaUploader, UploaderConfig
-            media_uploader = MediaUploader(UploaderConfig(
-                ssh_host=ssh_host,
-                ssh_user=ssh_user,
-                ssh_key_path=Path(ssh_key),
-                remote_path=os.getenv("MEDIA_REMOTE_PATH", "/opt/translator/tours-media"),
-                public_base_url=public_url,
-                ssh_port=int(os.getenv("MEDIA_SSH_PORT", "22")),
-            ))
-            logger.info(f"Media uploader configured: {public_url}")
-        else:
-            logger.warning("Media uploader not configured (missing SSH/URL settings)")
-    else:
-        logger.warning("Instagram publisher not configured (missing token/account_id)")
-
     # Create scheduler
     scheduler = create_default_scheduler(
         orchestrator=orchestrator,
         telegram_bot=bot,
-        publisher=publisher,
-        media_uploader=media_uploader,
     )
 
-    # Schedule tasks
+    # Schedule daily generation
     gen_time = scheduler.schedule_daily_generation()
-    pub_time = scheduler.schedule_daily_publishing()
     scheduler.schedule_auto_approval(check_interval_hours=1)
 
     logger.info(f"Scheduled generation at {gen_time}")
-    logger.info(f"Scheduled publishing at {pub_time}")
 
     # Start Telegram bot if configured
     if bot:
@@ -453,8 +412,6 @@ async def cmd_run(args):
         scheduler.stop()
         if bot:
             await bot.stop()
-        if publisher:
-            publisher.close()
         orchestrator.close()
 
     logger.info("System stopped")

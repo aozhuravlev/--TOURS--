@@ -5,11 +5,9 @@ FROM python:3.10-slim
 
 # Install system dependencies:
 # - ffmpeg: video composition with Ken Burns effect
-# - openssh-client: SCP upload to media hosting
 # - tzdata: timezone support for scheduler
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    openssh-client \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
