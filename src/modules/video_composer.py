@@ -1207,8 +1207,7 @@ class VideoComposer:
         video_paths = []
         music_offset = 0.0
 
-        # Get available fonts for per-story variation
-        available_fonts = self.get_available_fonts()
+        # Get fonts from config for per-story variation
         font_configs = []
         if FONT_ROTATION_AVAILABLE:
             for font_config in FONT_ROTATION:
