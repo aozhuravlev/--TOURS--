@@ -37,12 +37,6 @@ FONT_ROTATION: list[FontConfig] = [
         category="sans-serif",
     ),
     FontConfig(
-        name="Poppins",
-        filename="Poppins-Bold.ttf",
-        url="https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf",
-        category="sans-serif",
-    ),
-    FontConfig(
         name="Roboto",
         filename="Roboto-Bold.ttf",
         url="https://github.com/googlefonts/roboto/raw/main/src/hinted/Roboto-Bold.ttf",
