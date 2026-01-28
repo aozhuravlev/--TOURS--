@@ -134,7 +134,7 @@ def test_video_composition():
         video_paths = composer.compose_story_series(
             stories=stories,
             music_path=music_path,
-            ken_burns=True,
+            motion_effects=True,
             story_duration=5,  # Short for testing
         )
 
@@ -180,7 +180,7 @@ def test_full_pipeline():
 
     try:
         result = orchestrator.generate_story_series(
-            ken_burns=True,
+            motion_effects=True,
             min_count=3,
             max_count=4,  # Keep it small for testing
             story_duration=10,  # Shorter for testing

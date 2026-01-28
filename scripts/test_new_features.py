@@ -126,7 +126,7 @@ def test_text_overlay(image_path: Path = None):
             photo_path=image_path,
             music_path=music_path,
             text=test_text,
-            ken_burns=True,
+            motion_effect="random",
             duration=5,  # Short for testing
         )
         print(f"\nVideo created: {video_path}")
@@ -167,7 +167,7 @@ def test_full_pipeline():
     print("\nGenerating story (this may take a minute)...")
 
     try:
-        content = orchestrator.generate_story(ken_burns=True)
+        content = orchestrator.generate_story(motion_effects=True)
 
         if content:
             print(f"\nGenerated content:")

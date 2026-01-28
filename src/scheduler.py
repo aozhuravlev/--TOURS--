@@ -249,7 +249,7 @@ def create_default_scheduler(
                 subtopic=result.topic.subtopic,
                 stories=stories_data,
                 music_path=result.music.path,
-                ken_burns=result.ken_burns,
+                motion_effects=result.motion_effects,
                 story_duration=result.story_duration,
                 category_id=result.topic.category_id,
                 font_path=result.font_path,

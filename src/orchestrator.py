@@ -81,7 +81,7 @@ class PreparedStorySeriesResult:
     facts: str
     stories: list[PreparedStory]
     music: MediaFile
-    ken_burns: bool = True
+    motion_effects: bool = True
     story_duration: Optional[float] = None
     font_path: Optional[Path] = None  # Font for text overlay (from rotation)
     created_at: datetime = field(default_factory=datetime.now)
@@ -240,13 +240,15 @@ class Orchestrator:
         self,
         category_id: Optional[str] = None,
         ken_burns: bool = True,
+        motion_effects: bool = True,
     ) -> Optional[GeneratedContent]:
         """
         Generate complete Instagram Story content.
 
         Args:
             category_id: Optional category filter
-            ken_burns: Use Ken Burns effect in video
+            ken_burns: Legacy parameter (use motion_effects instead)
+            motion_effects: Use random motion effects in video
 
         Returns:
             GeneratedContent or None on failure
@@ -254,7 +256,7 @@ class Orchestrator:
         return self._generate_content(
             content_type="story",
             category_id=category_id,
-            ken_burns=ken_burns,
+            motion_effects=motion_effects,
         )
 
     def generate_post(
@@ -273,7 +275,7 @@ class Orchestrator:
         return self._generate_content(
             content_type="post",
             category_id=category_id,
-            ken_burns=False,
+            motion_effects=False,
         )
 
     def generate_story_series(
@@ -281,6 +283,7 @@ class Orchestrator:
         category_id: Optional[str] = None,
         subtopic: Optional[str] = None,
         ken_burns: bool = True,
+        motion_effects: bool = True,
         min_count: int = 3,
         max_count: int = 7,
         story_duration: Optional[float] = None,
@@ -291,7 +294,8 @@ class Orchestrator:
         Args:
             category_id: Optional category filter
             subtopic: Optional specific subtopic name (overrides category_id)
-            ken_burns: Use Ken Burns effect in videos
+            ken_burns: Legacy parameter (use motion_effects instead)
+            motion_effects: Use random motion effects in videos
             min_count: Minimum number of stories (default 3)
             max_count: Maximum number of stories (default 7)
             story_duration: Duration per story (None = random 5-8s per story)
@@ -432,9 +436,9 @@ class Orchestrator:
             video_paths = self.video_composer.compose_story_series(
                 stories=video_stories_input,
                 music_path=music.path,
-                ken_burns=ken_burns,
                 story_duration=story_duration,
                 text_config=text_config,
+                motion_effects=motion_effects,
             )
         except Exception as e:
             logger.error(f"Video composition failed: {e}")
@@ -482,6 +486,7 @@ class Orchestrator:
         category_id: Optional[str] = None,
         subtopic: Optional[str] = None,
         ken_burns: bool = True,
+        motion_effects: bool = True,
         min_count: int = 3,
         max_count: int = 7,
         story_duration: Optional[float] = None,
@@ -492,7 +497,8 @@ class Orchestrator:
         Args:
             category_id: Optional category filter
             subtopic: Optional specific subtopic name (overrides category_id)
-            ken_burns: Use Ken Burns effect when rendering (stored for later)
+            ken_burns: Legacy parameter (use motion_effects instead)
+            motion_effects: Use random motion effects when rendering (stored for later)
             min_count: Minimum number of stories (default 3)
             max_count: Maximum number of stories (default 7)
             story_duration: Duration per story (None = random 5-8s per story)
@@ -627,7 +633,7 @@ class Orchestrator:
             facts=facts,
             stories=prepared_stories,
             music=music,
-            ken_burns=ken_burns,
+            motion_effects=motion_effects,
             story_duration=story_duration,
             font_path=font_path,
             success=True,
@@ -679,9 +685,9 @@ class Orchestrator:
             video_paths = self.video_composer.compose_story_series(
                 stories=video_stories_input,
                 music_path=prepared.music.path,
-                ken_burns=prepared.ken_burns,
                 story_duration=prepared.story_duration,
                 text_config=text_config,
+                motion_effects=prepared.motion_effects,
             )
         except Exception as e:
             logger.error(f"Video composition failed: {e}")
@@ -738,7 +744,7 @@ class Orchestrator:
         self,
         content_type: str,
         category_id: Optional[str] = None,
-        ken_burns: bool = False,
+        motion_effects: bool = False,
     ) -> Optional[GeneratedContent]:
         """
         Internal content generation pipeline.
@@ -856,18 +862,20 @@ class Orchestrator:
             logger.info("Step 5: Composing video...")
             try:
                 # Use text overlay if enabled
+                # Determine motion effect
+                effect_mode = "random" if motion_effects else "static"
                 if self.use_text_overlay:
                     video_path = self.video_composer.compose_story_with_overlay(
                         photo_path=photo.path,
                         music_path=music.path,
                         text=text.humanized_text,
-                        ken_burns=ken_burns,
+                        motion_effect=effect_mode,
                     )
                 else:
                     video_path = self.video_composer.compose_story(
                         photo_path=photo.path,
                         music_path=music.path,
-                        ken_burns=ken_burns,
+                        motion_effect=effect_mode,
                     )
                 logger.info(f"Video created: {video_path}")
             except Exception as e:

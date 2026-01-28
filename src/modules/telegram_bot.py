@@ -87,7 +87,7 @@ class PendingSeriesForModeration:
     subtopic: str
     stories: list[PendingStoryForModeration]
     music_path: Path
-    ken_burns: bool
+    motion_effects: bool
     story_duration: Optional[float]
     category_id: str = ""  # For history recording
     font_path: Optional[Path] = None  # Font for text overlay (from rotation)
@@ -153,7 +153,7 @@ class ModerationBot:
                     "subtopic": series.subtopic,
                     "category_id": series.category_id,
                     "music_path": str(series.music_path),
-                    "ken_burns": series.ken_burns,
+                    "motion_effects": series.motion_effects,
                     "story_duration": series.story_duration,
                     "font_path": str(series.font_path) if series.font_path else None,
                     "stories": [
@@ -221,7 +221,7 @@ class ModerationBot:
                         subtopic=series_data["subtopic"],
                         stories=stories,
                         music_path=Path(series_data["music_path"]),
-                        ken_burns=series_data.get("ken_burns", True),
+                        motion_effects=series_data.get("motion_effects", series_data.get("ken_burns", True)),
                         story_duration=series_data.get("story_duration"),
                         category_id=series_data.get("category_id", ""),
                         font_path=font_path,
@@ -785,7 +785,7 @@ class ModerationBot:
             facts="",  # Not needed for rendering
             stories=prepared_stories,
             music=music,
-            ken_burns=series.ken_burns,
+            motion_effects=series.motion_effects,
             story_duration=series.story_duration,
             font_path=font_path,
             success=True,
@@ -1152,6 +1152,7 @@ class ModerationBot:
         stories: list[dict],
         music_path: Path,
         ken_burns: bool = True,
+        motion_effects: bool = True,
         story_duration: Optional[float] = None,
         category_id: str = "",
         font_path: Optional[Path] = None,
@@ -1160,16 +1161,14 @@ class ModerationBot:
         """
         Send prepared story series (photos + texts) to moderator for review.
 
-        Unlike send_series_for_moderation, this sends PHOTOS (not videos) with
-        per-story moderation buttons. Videos are rendered only after approval.
-
         Args:
             content_id: Unique content identifier
             topic: Category name
             subtopic: Subtopic name
             stories: List of dicts with 'order', 'text', 'photo_path', 'angle', 'keywords' keys
             music_path: Path to music file
-            ken_burns: Whether to use Ken Burns effect when rendering
+            ken_burns: Legacy parameter (use motion_effects instead)
+            motion_effects: Whether to use random motion effects when rendering
             story_duration: Duration per story
             category_id: Category ID for history recording
             font_path: Path to font file for text overlay (from rotation)
@@ -1201,7 +1200,7 @@ class ModerationBot:
             subtopic=subtopic,
             stories=pending_stories,
             music_path=music_path,
-            ken_burns=ken_burns,
+            motion_effects=motion_effects,
             story_duration=story_duration,
             category_id=category_id,
             font_path=font_path,

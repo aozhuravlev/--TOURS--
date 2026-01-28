@@ -168,7 +168,7 @@ def cmd_generate(args):
             # New workflow: prepare series (no video rendering) and send for moderation
             result = orchestrator.prepare_story_series(
                 subtopic=getattr(args, "subtopic", None),
-                ken_burns=not args.static,
+                motion_effects=not args.static,
                 min_count=getattr(args, "min_stories", 3),
                 max_count=getattr(args, "max_stories", 7),
             )
@@ -209,7 +209,7 @@ def cmd_generate(args):
                             subtopic=result.topic.subtopic,
                             stories=stories_data,
                             music_path=result.music.path,
-                            ken_burns=result.ken_burns,
+                            motion_effects=result.motion_effects,
                             story_duration=result.story_duration,
                             category_id=result.topic.category_id,
                             font_path=result.font_path,
@@ -241,7 +241,7 @@ def cmd_generate(args):
             # Old workflow: generate full videos immediately (for local testing)
             result = orchestrator.generate_story_series(
                 subtopic=getattr(args, "subtopic", None),
-                ken_burns=not args.static,
+                motion_effects=not args.static,
                 min_count=getattr(args, "min_stories", 3),
                 max_count=getattr(args, "max_stories", 7),
             )
@@ -279,7 +279,7 @@ def cmd_generate(args):
             print("Generation failed!")
             sys.exit(1)
     else:
-        content = orchestrator.generate_story(ken_burns=not args.static)
+        content = orchestrator.generate_story(motion_effects=not args.static)
         content_type = "Story"
         if content:
             print(f"\n{'=' * 60}")
@@ -432,7 +432,7 @@ def main():
     gen_parser.add_argument("--subtopic", type=str, help="Specific subtopic to use (e.g., 'Аренда велосипедов')")
     gen_parser.add_argument("--min-stories", type=int, default=3, help="Minimum stories in series (default: 3)")
     gen_parser.add_argument("--max-stories", type=int, default=7, help="Maximum stories in series (default: 7)")
-    gen_parser.add_argument("--static", action="store_true", help="Disable Ken Burns effect (static image)")
+    gen_parser.add_argument("--static", action="store_true", help="Disable motion effects (static image)")
     gen_parser.add_argument("--no-overlay", action="store_true", help="Disable text overlay on video")
     gen_parser.add_argument("--send-telegram", action="store_true", help="Send to Telegram for moderation")
 

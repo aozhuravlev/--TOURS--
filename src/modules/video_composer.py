@@ -6,7 +6,7 @@ Creates Instagram Stories videos from:
 - Music track (trimmed to duration)
 
 Supports:
-- Ken Burns effect (slow zoom/pan)
+- Motion effects (zoom, pan, Ken Burns variants)
 - Text overlays with semi-transparent background
 """
 
@@ -86,6 +86,87 @@ TEXT_POSITIONS = [
     ("top", "left"),
     ("top", "right"),
 ]
+
+
+# Probability of choosing static (no motion) effect
+STATIC_PROBABILITY = 0.2
+
+
+@dataclass
+class MotionEffect:
+    """A visual motion effect for story videos."""
+    name: str
+    z_expr: str  # FFmpeg zoompan z expression (empty for static)
+    x_expr: str  # FFmpeg zoompan x expression
+    y_expr: str  # FFmpeg zoompan y expression
+
+    @property
+    def is_static(self) -> bool:
+        return self.name == "static"
+
+
+# Motion effects available for random selection
+MOTION_EFFECTS = [
+    MotionEffect(
+        name="zoom_in_center",
+        z_expr="min(zoom+{zoom_speed:.6f},1.2)",
+        x_expr="iw/2-(iw/zoom/2)",
+        y_expr="ih/2-(ih/zoom/2)",
+    ),
+    MotionEffect(
+        name="zoom_out_center",
+        z_expr="max(1.2-on*0.2/{total_frames},1.0)",
+        x_expr="iw/2-(iw/zoom/2)",
+        y_expr="ih/2-(ih/zoom/2)",
+    ),
+    MotionEffect(
+        name="pan_left_right",
+        z_expr="1.15",
+        x_expr="on*(iw-iw/zoom)/{total_frames}",
+        y_expr="ih/2-(ih/zoom/2)",
+    ),
+    MotionEffect(
+        name="pan_right_left",
+        z_expr="1.15",
+        x_expr="(iw-iw/zoom)-on*(iw-iw/zoom)/{total_frames}",
+        y_expr="ih/2-(ih/zoom/2)",
+    ),
+    MotionEffect(
+        name="zoom_in_top_left",
+        z_expr="min(zoom+{zoom_speed:.6f},1.2)",
+        x_expr="0",
+        y_expr="0",
+    ),
+    MotionEffect(
+        name="zoom_in_top_right",
+        z_expr="min(zoom+{zoom_speed:.6f},1.2)",
+        x_expr="iw-iw/zoom",
+        y_expr="0",
+    ),
+    MotionEffect(
+        name="zoom_in_bottom_left",
+        z_expr="min(zoom+{zoom_speed:.6f},1.2)",
+        x_expr="0",
+        y_expr="ih-ih/zoom",
+    ),
+    MotionEffect(
+        name="zoom_in_bottom_right",
+        z_expr="min(zoom+{zoom_speed:.6f},1.2)",
+        x_expr="iw-iw/zoom",
+        y_expr="ih-ih/zoom",
+    ),
+    MotionEffect(
+        name="static",
+        z_expr="",
+        x_expr="",
+        y_expr="",
+    ),
+]
+
+# Lookup by name
+_EFFECTS_BY_NAME = {e.name: e for e in MOTION_EFFECTS}
+# Non-static effects for random selection
+_NON_STATIC_EFFECTS = [e for e in MOTION_EFFECTS if not e.is_static]
 
 
 @dataclass
@@ -773,6 +854,77 @@ class VideoComposer:
 
         return photo_path, False
 
+    @staticmethod
+    def _pick_random_effect(static_probability: float = STATIC_PROBABILITY) -> MotionEffect:
+        """Pick a random motion effect, with a chance of static."""
+        if random.random() < static_probability:
+            return _EFFECTS_BY_NAME["static"]
+        return random.choice(_NON_STATIC_EFFECTS)
+
+    def _build_motion_command(
+        self,
+        effect: MotionEffect,
+        photo_path: Path,
+        music_path: Path,
+        output_path: Path,
+        duration: float,
+        music_offset: float = 0,
+    ) -> list[str]:
+        """Build FFmpeg command for a given motion effect."""
+        if effect.is_static:
+            return self._build_static_command(
+                photo_path, music_path, output_path, duration, music_offset,
+            )
+
+        w = self.config.width
+        h = self.config.height
+        fps = self.config.fps
+        total_frames = int(duration * fps)
+        zoom_speed = 0.2 / total_frames
+
+        z = effect.z_expr.format(zoom_speed=zoom_speed, total_frames=total_frames)
+        x = effect.x_expr.format(total_frames=total_frames)
+        y = effect.y_expr.format(total_frames=total_frames)
+
+        vf = (
+            f"scale=8000:-1,"
+            f"zoompan="
+            f"z='{z}':"
+            f"x='{x}':"
+            f"y='{y}':"
+            f"d={total_frames}:"
+            f"s={w}x{h}:"
+            f"fps={fps},"
+            f"setsar=1"
+        )
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-loop", "1",
+            "-i", str(photo_path),
+        ]
+
+        if music_offset > 0:
+            cmd.extend(["-ss", f"{music_offset:.3f}"])
+        cmd.extend(["-i", str(music_path)])
+
+        cmd.extend([
+            "-vf", vf,
+            "-c:v", self.config.codec,
+            "-preset", self.config.preset,
+            "-crf", str(self.config.crf),
+            "-c:a", "aac",
+            "-b:a", self.config.audio_bitrate,
+            "-t", f"{duration:.3f}",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-shortest",
+            str(output_path),
+        ])
+
+        return cmd
+
     def compose_story(
         self,
         photo_path: Path,
@@ -781,6 +933,7 @@ class VideoComposer:
         duration: Optional[float] = None,
         ken_burns: bool = False,
         music_offset: float = 0,
+        motion_effect: Optional[str] = None,
     ) -> Path:
         """
         Create a story video from photo and music.
@@ -790,8 +943,12 @@ class VideoComposer:
             music_path: Path to input music file
             output_path: Custom output path (auto-generated if None)
             duration: Video duration in seconds (uses config default or music length)
-            ken_burns: Enable Ken Burns effect (slow zoom)
+            ken_burns: Legacy parameter (use motion_effect instead)
             music_offset: Start position in music file (seconds)
+            motion_effect: Effect name, "random", or None.
+                "random" — pick random effect (including static with STATIC_PROBABILITY).
+                None — use ken_burns param for backward compatibility.
+                Specific name — use that effect.
 
         Returns:
             Path to created video file
@@ -825,17 +982,34 @@ class VideoComposer:
                 else:
                     duration = float(self.config.duration)
 
-            logger.info(f"Composing video: {photo_path.name} + {music_path.name} ({duration:.2f}s, offset={music_offset:.2f}s)")
+            # Resolve motion effect
+            if motion_effect is not None:
+                # New API
+                if motion_effect == "random":
+                    effect = self._pick_random_effect()
+                elif motion_effect == "static":
+                    effect = _EFFECTS_BY_NAME["static"]
+                else:
+                    effect = _EFFECTS_BY_NAME.get(motion_effect)
+                    if not effect:
+                        logger.warning(f"Unknown motion effect '{motion_effect}', using random")
+                        effect = self._pick_random_effect()
+            else:
+                # Legacy ken_burns compat
+                if ken_burns:
+                    effect = _EFFECTS_BY_NAME["zoom_in_center"]
+                else:
+                    effect = _EFFECTS_BY_NAME["static"]
+
+            logger.info(
+                f"Composing video: {photo_path.name} + {music_path.name} "
+                f"({duration:.2f}s, offset={music_offset:.2f}s, effect={effect.name})"
+            )
 
             # Build FFmpeg command
-            if ken_burns:
-                cmd = self._build_ken_burns_command(
-                    actual_photo_path, music_path, output_path, duration, music_offset
-                )
-            else:
-                cmd = self._build_static_command(
-                    actual_photo_path, music_path, output_path, duration, music_offset
-                )
+            cmd = self._build_motion_command(
+                effect, actual_photo_path, music_path, output_path, duration, music_offset
+            )
 
             # Execute FFmpeg
             try:
@@ -877,11 +1051,10 @@ class VideoComposer:
         ken_burns: bool = True,
         text_config: Optional[TextOverlayConfig] = None,
         music_offset: float = 0,
+        motion_effect: Optional[str] = None,
     ) -> Path:
         """
         Create a story video with text overlay.
-
-        Uses PIL/Pillow for text rendering (more reliable than FFmpeg drawtext).
 
         Args:
             photo_path: Path to input photo
@@ -889,9 +1062,10 @@ class VideoComposer:
             text: Text to overlay on the video
             output_path: Custom output path (auto-generated if None)
             duration: Video duration in seconds
-            ken_burns: Enable Ken Burns effect
+            ken_burns: Legacy parameter (use motion_effect instead)
             text_config: Text overlay settings (uses defaults if None)
             music_offset: Start position in music file (seconds)
+            motion_effect: Effect name, "random", or None (see compose_story)
 
         Returns:
             Path to created video file
@@ -918,6 +1092,7 @@ class VideoComposer:
                 duration=duration,
                 ken_burns=ken_burns,
                 music_offset=music_offset,
+                motion_effect=motion_effect,
             )
 
         # Update config with actual font path
@@ -947,6 +1122,7 @@ class VideoComposer:
                 duration=duration,
                 ken_burns=ken_burns,
                 music_offset=music_offset,
+                motion_effect=motion_effect,
             )
 
             return video_path
@@ -1156,6 +1332,7 @@ class VideoComposer:
         min_duration: float = 5.0,
         max_duration: float = 8.0,
         text_config: Optional[TextOverlayConfig] = None,
+        motion_effects: bool = True,
     ) -> list[Path]:
         """
         Create a series of story videos with continuous music.
@@ -1163,17 +1340,15 @@ class VideoComposer:
         Each video uses a sequential segment of the same music track,
         creating a continuous listening experience when played in order.
 
-        Duration for each story is randomized (5-8 seconds by default) with
-        hundredths precision to avoid detection patterns from fixed-length videos.
-
         Args:
             stories: List of dicts with 'photo_path' and 'text' keys
             music_path: Path to music file (will be split into segments)
-            ken_burns: Enable Ken Burns effect
+            ken_burns: Legacy parameter (ignored when motion_effects is set)
             story_duration: Fixed duration for all stories (None = random per story)
             min_duration: Minimum random duration (default: 5.0 seconds)
             max_duration: Maximum random duration (default: 8.0 seconds)
             text_config: Optional text overlay config (with font from rotation)
+            motion_effects: If True, pick random effect per story. If False, all static.
 
         Returns:
             List of paths to created video files
@@ -1224,6 +1399,12 @@ class VideoComposer:
             if music_offset + duration > music_duration:
                 music_offset = music_offset % music_duration
 
+            # Pick motion effect for this story
+            if motion_effects:
+                effect = self._pick_random_effect()
+            else:
+                effect = _EFFECTS_BY_NAME["static"]
+
             # Create per-story text config with random font and position
             story_text_config = text_config
             if text and font_configs:
@@ -1240,12 +1421,14 @@ class VideoComposer:
                 )
                 logger.info(
                     f"Composing story {i + 1}/{len(stories)}: "
-                    f"font={font_cfg.name}, pos={position}, bg={not font_cfg.is_bold}"
+                    f"font={font_cfg.name}, pos={position}, bg={not font_cfg.is_bold}, "
+                    f"effect={effect.name}"
                 )
             else:
                 logger.info(
                     f"Composing story {i + 1}/{len(stories)}: "
-                    f"duration={duration:.2f}s, music_offset={music_offset:.2f}s"
+                    f"duration={duration:.2f}s, music_offset={music_offset:.2f}s, "
+                    f"effect={effect.name}"
                 )
 
             if text:
@@ -1254,17 +1437,17 @@ class VideoComposer:
                     music_path=music_path,
                     text=text,
                     duration=duration,
-                    ken_burns=ken_burns,
                     text_config=story_text_config,
                     music_offset=music_offset,
+                    motion_effect=effect.name,
                 )
             else:
                 video_path = self.compose_story(
                     photo_path=photo_path,
                     music_path=music_path,
                     duration=duration,
-                    ken_burns=ken_burns,
                     music_offset=music_offset,
+                    motion_effect=effect.name,
                 )
 
             video_paths.append(video_path)
