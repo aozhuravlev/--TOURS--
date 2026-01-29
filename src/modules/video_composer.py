@@ -89,7 +89,8 @@ TEXT_POSITIONS = [
 
 
 # Probability of choosing static (no motion) effect
-STATIC_PROBABILITY = 0.2
+# Set to 1.0 to disable motion effects (client feedback: effects interfere with text readability)
+STATIC_PROBABILITY = 1.0
 
 
 @dataclass
