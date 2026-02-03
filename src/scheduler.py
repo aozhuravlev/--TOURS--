@@ -243,7 +243,7 @@ def create_default_scheduler(
             short_hash = hashlib.md5(result.topic.subtopic.encode()).hexdigest()[:8]
             content_id = f"series_{short_hash}"
 
-            await telegram_bot.send_prepared_series_for_moderation(
+            send_success = await telegram_bot.send_prepared_series_for_moderation(
                 content_id=content_id,
                 topic=result.topic.category_name,
                 subtopic=result.topic.subtopic,
@@ -255,6 +255,10 @@ def create_default_scheduler(
                 font_path=result.font_path,
                 prepared_result=result,
             )
+
+            if not send_success:
+                logger.error("Failed to send series to Telegram for moderation")
+                return False
 
         return True
 

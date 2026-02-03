@@ -261,7 +261,23 @@ class ModerationBot:
 
     def build_app(self) -> Application:
         """Build and configure the bot application."""
-        self.app = Application.builder().token(self.token).build()
+        from telegram.request import HTTPXRequest
+
+        # Configure longer timeouts for media uploads
+        # Default is 5s which is too short for sending multiple photos
+        request = HTTPXRequest(
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=10.0,
+        )
+
+        self.app = (
+            Application.builder()
+            .token(self.token)
+            .request(request)
+            .build()
+        )
 
         # Handlers
         self.app.add_handler(CommandHandler("start", self._cmd_start))
