@@ -202,7 +202,7 @@ def cmd_generate(args):
                     content_id = f"series_{short_hash}"
 
                     async def send():
-                        await bot.start()
+                        await bot.start_send_only()
                         success = await bot.send_prepared_series_for_moderation(
                             content_id=content_id,
                             topic=result.topic.category_name,
@@ -215,22 +215,11 @@ def cmd_generate(args):
                             font_path=result.font_path,
                             prepared_result=result,
                         )
-                        # Keep bot running to handle callbacks
-                        if success:
-                            print("Sent to Telegram! Waiting for moderation...")
-                            print("Press Ctrl+C to stop waiting.")
-                            try:
-                                while True:
-                                    await asyncio.sleep(1)
-                            except asyncio.CancelledError:
-                                pass
-                        await bot.stop()
+                        await bot.stop_send_only()
                         return success
 
-                    try:
-                        asyncio.run(send())
-                    except KeyboardInterrupt:
-                        print("\nStopped.")
+                    asyncio.run(send())
+                    print("Sent to Telegram! Moderation will be handled by the main bot.")
                 else:
                     print("Telegram bot not configured")
             else:

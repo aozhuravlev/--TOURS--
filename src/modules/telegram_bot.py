@@ -1390,6 +1390,17 @@ class ModerationBot:
         await self.app.start()
         await self.app.updater.start_polling()
 
+    async def start_send_only(self):
+        """Initialize bot for sending messages only (no polling)."""
+        if not self.app:
+            self.build_app()
+        await self.app.initialize()
+
+    async def stop_send_only(self):
+        """Shutdown bot after send-only mode."""
+        if self.app:
+            await self.app.shutdown()
+
     async def stop(self):
         """Stop bot."""
         if self.app:

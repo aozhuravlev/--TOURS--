@@ -58,6 +58,7 @@ media/
 python main.py generate --series
 
 # Сгенерировать и отправить в Telegram на модерацию
+# (команда завершается сразу после отправки, callback'и обрабатывает основной бот)
 python main.py generate --series --send-telegram
 
 # Сгенерировать одиночную Story
@@ -122,6 +123,20 @@ python main.py run
 - Можно редактировать/удалять отдельные истории
 - Видео рендерятся только для одобренного контента
 - Экономия времени и ресурсов
+
+### Docker: разделение генерации и модерации
+
+При работе в Docker генерация и обработка callback'ов разделены:
+
+```bash
+# Основной бот (обрабатывает callback'и, рендерит видео)
+docker compose up -d tours-bot
+
+# Генерация серии (отправляет в Telegram и сразу завершается)
+docker compose run --rm tours-bot python main.py generate --series --send-telegram
+```
+
+Данные серии сохраняются в `data/pending_series.json` и подхватываются основным ботом.
 
 ## Структура проекта
 
