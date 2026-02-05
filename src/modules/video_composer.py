@@ -174,14 +174,14 @@ _NON_STATIC_EFFECTS = [e for e in MOTION_EFFECTS if not e.is_static]
 class TextOverlayConfig:
     """Text overlay settings for Stories."""
     font_path: Optional[Path] = None  # Path to .ttf font file
-    font_size: int = 45  # Base font size in pixels
+    font_size: int = 54  # Base font size in pixels (+20% from 45)
     font_color: str = "white"
     background_color: str = "black"
     background_opacity: float = 0.6  # 0.0 - 1.0
     padding: int = 20  # Padding around text
     shadow_offset: int = 3  # Shadow offset in pixels
     shadow_color: str = "black"
-    max_width_chars: int = 32  # Max characters per line before wrap
+    max_width_chars: int = 45  # Max characters per line before wrap (wider = flatter)
     line_spacing: int = 1  # Space between lines (imagetext-py multiplier)
     emoji_font_path: Optional[Path] = None  # Fallback font for emoji
     # Per-story variations
@@ -1383,13 +1383,27 @@ class VideoComposer:
         video_paths = []
         music_offset = 0.0
 
-        # Get fonts from config for per-story variation
-        font_configs = []
+        # Get fonts from config — select ONE font for entire series
+        series_font_path = None
+        series_font_cfg = None
         if FONT_ROTATION_AVAILABLE:
             for font_config in FONT_ROTATION:
                 font_path = self.fonts_dir / font_config.filename
                 if font_path.exists():
-                    font_configs.append((font_path, font_config))
+                    if series_font_path is None:
+                        # Use font from text_config if provided, otherwise first available
+                        if text_config and text_config.font_path:
+                            series_font_path = text_config.font_path
+                            # Find matching config
+                            for fc in FONT_ROTATION:
+                                if fc.filename == text_config.font_path.name:
+                                    series_font_cfg = fc
+                                    break
+                            if not series_font_cfg:
+                                series_font_cfg = font_config
+                        else:
+                            series_font_path = font_path
+                            series_font_cfg = font_config
 
         for i, story in enumerate(stories):
             photo_path = Path(story["photo_path"])
@@ -1406,23 +1420,21 @@ class VideoComposer:
             else:
                 effect = _EFFECTS_BY_NAME["static"]
 
-            # Create per-story text config with random font and position
+            # Create per-story text config with SAME font but random position
             story_text_config = text_config
-            if text and font_configs:
-                # Random font for this story
-                font_path, font_cfg = random.choice(font_configs)
-                # Random position for this story
+            if text and series_font_path:
+                # Random position for this story (variety within series)
                 position = random.choice(TEXT_POSITIONS)
 
                 story_text_config = TextOverlayConfig(
-                    font_path=font_path,
+                    font_path=series_font_path,
                     position=position,
-                    use_background=not font_cfg.is_bold,  # Bold fonts don't need bg
-                    size_multiplier=font_cfg.size_multiplier,
+                    use_background=not series_font_cfg.is_bold,  # Bold fonts don't need bg
+                    size_multiplier=series_font_cfg.size_multiplier,
                 )
                 logger.info(
                     f"Composing story {i + 1}/{len(stories)}: "
-                    f"font={font_cfg.name}, pos={position}, bg={not font_cfg.is_bold}, "
+                    f"font={series_font_cfg.name}, pos={position}, bg={not series_font_cfg.is_bold}, "
                     f"effect={effect.name}"
                 )
             else:

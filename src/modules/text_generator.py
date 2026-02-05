@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from config.memes import format_memes_for_prompt, get_meme_by_id
+
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
@@ -48,6 +50,7 @@ class GeneratedStorySeries:
     subtopic: str
     stories: list[StoryItem]
     success: bool
+    selected_meme: Optional[str] = None  # ID of selected meme
     error: Optional[str] = None
 
 
@@ -144,15 +147,26 @@ def _validate_story_series_json(data: dict, expected_count: int) -> tuple[bool, 
     if len(stories) == 0:
         return False, "No stories in response"
 
+    # Validate selected_meme (warning only if missing)
+    selected_meme = data.get("selected_meme")
+    if not selected_meme:
+        logger.warning("Missing 'selected_meme' in response")
+    elif not isinstance(selected_meme, str):
+        logger.warning(f"'selected_meme' should be string, got: {type(selected_meme)}")
+    else:
+        # Validate meme ID exists
+        if not get_meme_by_id(selected_meme):
+            logger.warning(f"Unknown meme ID: {selected_meme}")
+
     # Validate each story
     required_fields = ["order", "text"]
     for i, story in enumerate(stories):
         if not isinstance(story, dict):
             return False, f"Story {i + 1} must be an object"
 
-        for field in required_fields:
-            if field not in story:
-                return False, f"Story {i + 1} missing required field: {field}"
+        for field_name in required_fields:
+            if field_name not in story:
+                return False, f"Story {i + 1} missing required field: {field_name}"
 
         # Validate text length (100-200 chars target, allow tolerance up to 220)
         text = story.get("text", "")
@@ -332,12 +346,14 @@ class TextGenerator:
             )
 
         # Fill prompt
+        memes_list = format_memes_for_prompt()
         prompt = prompt_template.format(
             count=count,
             topic=topic,
             subtopic=subtopic,
             facts=facts or "Нет дополнительных фактов",
             length_requirements=length_requirements,
+            memes_list=memes_list,
         )
 
         # Call API
@@ -376,6 +392,11 @@ class TextGenerator:
                     logger.warning(f"JSON validation failed: {validation_error}")
                     raise ValueError(validation_error)
 
+                # Extract selected meme
+                selected_meme = data.get("selected_meme")
+                if selected_meme:
+                    logger.info(f"Selected meme: {selected_meme}")
+
                 # Build StoryItem list
                 stories = []
                 for item in data.get("stories", []):
@@ -392,6 +413,7 @@ class TextGenerator:
                     subtopic=subtopic,
                     stories=stories,
                     success=True,
+                    selected_meme=selected_meme,
                 )
 
             except json.JSONDecodeError as e:

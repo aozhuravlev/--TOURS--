@@ -93,12 +93,6 @@ FONT_ROTATION: list[FontConfig] = [
         category="serif",
     ),
     FontConfig(
-        name="Crimson Text",
-        filename="CrimsonText-Bold.ttf",
-        url="https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Bold.ttf",
-        category="serif",
-    ),
-    FontConfig(
         name="Alice",
         filename="Alice-Regular.ttf",
         url="https://raw.githubusercontent.com/google/fonts/main/ofl/alice/Alice-Regular.ttf",
@@ -139,15 +133,6 @@ FONT_ROTATION: list[FontConfig] = [
         name="Marck Script",
         filename="MarckScript-Regular.ttf",
         url="https://github.com/google/fonts/raw/main/ofl/marckscript/MarckScript-Regular.ttf",
-        category="script",
-        weight="Regular",
-        size_multiplier=1.3,  # Script font
-        is_bold=False,  # Needs background
-    ),
-    FontConfig(
-        name="Bad Script",
-        filename="BadScript-Regular.ttf",
-        url="https://github.com/google/fonts/raw/main/ofl/badscript/BadScript-Regular.ttf",
         category="script",
         weight="Regular",
         size_multiplier=1.3,  # Script font
