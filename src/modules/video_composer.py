@@ -181,7 +181,7 @@ class TextOverlayConfig:
     padding: int = 20  # Padding around text
     shadow_offset: int = 3  # Shadow offset in pixels
     shadow_color: str = "black"
-    max_width_chars: int = 45  # Max characters per line before wrap (wider = flatter)
+    max_width_chars: int = 35  # Max characters per line before wrap (wider = flatter)
     line_spacing: int = 1  # Space between lines (imagetext-py multiplier)
     emoji_font_path: Optional[Path] = None  # Fallback font for emoji
     # Per-story variations
@@ -636,6 +636,24 @@ class VideoComposer:
             draw_emojis=True,
         )
 
+        # Ensure text fits within screen safe zones
+        max_text_w = target_w - 2 * SAFE_SIDE
+        if text_w > max_text_w:
+            original_text = ' '.join(lines)
+            current_max_chars = cfg.max_width_chars
+            while text_w > max_text_w and current_max_chars > 15:
+                current_max_chars -= 3
+                lines = textwrap.wrap(original_text, width=current_max_chars)
+                text_w, text_h = text_size_multiline(
+                    lines, actual_font_size, font,
+                    line_spacing=cfg.line_spacing,
+                    draw_emojis=True,
+                )
+            logger.info(
+                f"Re-wrapped text: {cfg.max_width_chars}->{current_max_chars} chars, "
+                f"width={text_w}px (max={max_text_w}px)"
+            )
+
         # Calculate position based on cfg.position
         vertical, horizontal = cfg.position
         padding = cfg.padding
@@ -660,6 +678,10 @@ class VideoComposer:
             bg_top = start_y - padding
             bg_right = start_x + text_w + padding
             bg_bottom = start_y + text_h + padding
+
+            # Clamp background to screen bounds (safety net)
+            bg_left = max(bg_left, 0)
+            bg_right = min(bg_right, target_w)
 
             overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
             overlay_draw = ImageDraw.Draw(overlay)
@@ -739,6 +761,28 @@ class VideoComposer:
         total_height = len(lines) * (line_height + cfg.line_spacing)
         max_width = max(line_widths) if line_widths else 0
 
+        # Ensure text fits within screen safe zones
+        max_text_w = target_w - 2 * SAFE_SIDE
+        if max_width > max_text_w:
+            original_text = ' '.join(lines)
+            current_max_chars = cfg.max_width_chars
+            while max_width > max_text_w and current_max_chars > 15:
+                current_max_chars -= 3
+                lines = textwrap.wrap(original_text, width=current_max_chars)
+                line_widths = []
+                line_heights = []
+                for line in lines:
+                    bbox = draw.textbbox((0, 0), line, font=font)
+                    line_widths.append(bbox[2] - bbox[0])
+                    line_heights.append(bbox[3] - bbox[1])
+                line_height = max(line_heights) if line_heights else cfg.font_size
+                total_height = len(lines) * (line_height + cfg.line_spacing)
+                max_width = max(line_widths) if line_widths else 0
+            logger.info(
+                f"PIL re-wrapped text: {cfg.max_width_chars}->{current_max_chars} chars, "
+                f"width={max_width}px (max={max_text_w}px)"
+            )
+
         # Position: bottom of safe zone
         safe_zone_bottom = target_h - 340
         bottom_margin = 40
@@ -750,6 +794,10 @@ class VideoComposer:
         bg_top = start_y - padding
         bg_right = (target_w + max_width) // 2 + padding
         bg_bottom = start_y + total_height + padding
+
+        # Clamp background to screen bounds (safety net)
+        bg_left = max(bg_left, 0)
+        bg_right = min(bg_right, target_w)
 
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         overlay_draw = ImageDraw.Draw(overlay)
