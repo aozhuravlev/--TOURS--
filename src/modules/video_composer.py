@@ -636,13 +636,14 @@ class VideoComposer:
             draw_emojis=True,
         )
 
-        # Ensure text fits within screen safe zones
-        max_text_w = target_w - 2 * SAFE_SIDE
+        # Ensure text fits within screen safe zones (40px safety margin
+        # compensates for font metric inaccuracies in text_size_multiline)
+        max_text_w = target_w - 2 * SAFE_SIDE - 40
         if text_w > max_text_w:
             original_text = ' '.join(lines)
             current_max_chars = cfg.max_width_chars
-            while text_w > max_text_w and current_max_chars > 15:
-                current_max_chars -= 3
+            while text_w > max_text_w and current_max_chars > 12:
+                current_max_chars -= 2
                 lines = textwrap.wrap(original_text, width=current_max_chars)
                 text_w, text_h = text_size_multiline(
                     lines, actual_font_size, font,
@@ -671,6 +672,9 @@ class VideoComposer:
             start_x = target_w - text_w - SAFE_SIDE
         else:  # center
             start_x = (target_w - text_w) // 2
+
+        # Final safety clamp: ensure text stays within image bounds
+        start_x = max(SAFE_SIDE, min(start_x, target_w - text_w - SAFE_SIDE))
 
         # Draw background only if use_background is True (for non-bold fonts)
         if cfg.use_background:
@@ -761,13 +765,13 @@ class VideoComposer:
         total_height = len(lines) * (line_height + cfg.line_spacing)
         max_width = max(line_widths) if line_widths else 0
 
-        # Ensure text fits within screen safe zones
-        max_text_w = target_w - 2 * SAFE_SIDE
+        # Ensure text fits within screen safe zones (40px safety margin)
+        max_text_w = target_w - 2 * SAFE_SIDE - 40
         if max_width > max_text_w:
             original_text = ' '.join(lines)
             current_max_chars = cfg.max_width_chars
-            while max_width > max_text_w and current_max_chars > 15:
-                current_max_chars -= 3
+            while max_width > max_text_w and current_max_chars > 12:
+                current_max_chars -= 2
                 lines = textwrap.wrap(original_text, width=current_max_chars)
                 line_widths = []
                 line_heights = []
@@ -1474,11 +1478,16 @@ class VideoComposer:
                 # Random position for this story (variety within series)
                 position = random.choice(TEXT_POSITIONS)
 
+                # Scale max_width_chars inversely with size_multiplier
+                # to prevent wide fonts from overflowing safe zones
+                scaled_max_chars = int(35 / series_font_cfg.size_multiplier)
+
                 story_text_config = TextOverlayConfig(
                     font_path=series_font_path,
                     position=position,
                     use_background=not series_font_cfg.is_bold,  # Bold fonts don't need bg
                     size_multiplier=series_font_cfg.size_multiplier,
+                    max_width_chars=scaled_max_chars,
                 )
                 logger.info(
                     f"Composing story {i + 1}/{len(stories)}: "

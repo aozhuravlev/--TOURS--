@@ -168,9 +168,9 @@ def _validate_story_series_json(data: dict, expected_count: int) -> tuple[bool, 
             if field_name not in story:
                 return False, f"Story {i + 1} missing required field: {field_name}"
 
-        # Validate text length (100-200 chars target, allow tolerance up to 220)
+        # Validate text length (50-200 chars target, allow tolerance up to 230)
         text = story.get("text", "")
-        if len(text) > 220:
+        if len(text) > 230:
             logger.warning(f"Story {i + 1} text too long ({len(text)} chars): {text[:50]}...")
 
         # Validate order
@@ -326,10 +326,28 @@ class TextGenerator:
         count = random.randint(min_count, max_count)
         logger.info(f"Generating story series: {count} stories for '{subtopic}'")
 
-        # Generate random target lengths for each story (100-200 chars)
-        target_lengths = [random.randint(100, 200) for _ in range(count)]
+        # Length categories for visual variety across stories
+        LENGTH_SHORT = (50, 80)     # 1-2 lines on screen
+        LENGTH_MEDIUM = (100, 140)  # 3-4 lines
+        LENGTH_LONG = (160, 200)    # 5-6 lines
+
+        # Guarantee at least 1 short and 1 long, rest random
+        categories = [LENGTH_SHORT, LENGTH_LONG]
+        for _ in range(count - 2):
+            categories.append(random.choice([LENGTH_SHORT, LENGTH_MEDIUM, LENGTH_LONG]))
+        random.shuffle(categories)
+
+        # First story should not be short (intro needs substance)
+        if categories[0] == LENGTH_SHORT:
+            for j in range(1, len(categories)):
+                if categories[j] != LENGTH_SHORT:
+                    categories[0], categories[j] = categories[j], categories[0]
+                    break
+
+        target_lengths = [random.randint(*cat) for cat in categories]
         length_requirements = "\n".join(
-            f"- Сториз {i + 1}: около {length} символов"
+            f"- Сториз {i + 1}: {'КОРОТКО' if length < 90 else 'средне' if length < 150 else 'подробно'}, "
+            f"около {length} символов"
             for i, length in enumerate(target_lengths)
         )
         logger.debug(f"Target lengths: {target_lengths}")
