@@ -511,6 +511,7 @@ class VideoComposer:
     def _wrap_text(self, text: str, max_chars: int = 25) -> list[str]:
         """
         Wrap text into lines that fit within max characters.
+        Fallback method — use _wrap_text_by_pixels for accurate wrapping.
 
         Args:
             text: Text to wrap
@@ -521,6 +522,62 @@ class VideoComposer:
         """
         # Use textwrap for proper word wrapping
         return textwrap.wrap(text, width=max_chars)
+
+    def _wrap_text_by_pixels(
+        self,
+        text: str,
+        font_path: Path,
+        font_size: int,
+        max_width_px: int,
+    ) -> list[str]:
+        """
+        Wrap text into lines that fit within max_width_px pixels.
+
+        Uses PIL font metrics for accurate pixel-based measurement,
+        unlike character-based wrapping which doesn't account for
+        variable character widths (especially Cyrillic).
+
+        Args:
+            text: Text to wrap
+            font_path: Path to font file
+            font_size: Font size in pixels (already includes size_multiplier)
+            max_width_px: Maximum line width in pixels
+
+        Returns:
+            List of text lines, each fitting within max_width_px
+        """
+        try:
+            font = ImageFont.truetype(str(font_path), font_size)
+        except Exception:
+            logger.warning(f"Failed to load font for pixel wrapping: {font_path}")
+            return self._wrap_text(text, max_chars=25)
+
+        dummy_img = Image.new("RGB", (1, 1))
+        draw = ImageDraw.Draw(dummy_img)
+
+        words = text.split()
+        if not words:
+            return [text] if text else [""]
+
+        lines = []
+        current_line = ""
+
+        for word in words:
+            test_line = f"{current_line} {word}" if current_line else word
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            line_width = bbox[2] - bbox[0]
+
+            if line_width <= max_width_px:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+
+        if current_line:
+            lines.append(current_line)
+
+        return lines if lines else [text]
 
     def _escape_text_for_ffmpeg(self, text: str) -> str:
         """
@@ -581,12 +638,25 @@ class VideoComposer:
         if img.mode != "RGBA":
             img = img.convert("RGBA")
 
-        # Wrap text into lines
-        lines = self._wrap_text(text, cfg.max_width_chars)
-        wrapped_text = "\n".join(lines)
-
-        # Get font path
+        # Get font path (needed for pixel-based wrapping)
         font_path = cfg.font_path or self._default_font
+
+        # Wrap text using pixel-based measurement for accuracy
+        # Character-based wrapping is unreliable: Cyrillic chars are much wider
+        # than Latin, and font size_multiplier makes it worse
+        actual_font_size = int(cfg.font_size * cfg.size_multiplier)
+        # Available width: image width minus safe zones minus safety margin
+        # 80px margin accounts for PIL vs imagetext-py measurement differences
+        max_text_w = target_w - 2 * SAFE_SIDE - 80
+        if font_path and font_path.exists():
+            lines = self._wrap_text_by_pixels(text, font_path, actual_font_size, max_text_w)
+            logger.debug(
+                f"Pixel-wrapped text: {len(lines)} lines, "
+                f"font_size={actual_font_size}px, max_width={max_text_w}px"
+            )
+        else:
+            lines = self._wrap_text(text, cfg.max_width_chars)
+        wrapped_text = "\n".join(lines)
 
         # Use imagetext-py if available (for emoji support)
         if IMAGETEXT_AVAILABLE:
@@ -636,24 +706,24 @@ class VideoComposer:
             draw_emojis=True,
         )
 
-        # Ensure text fits within screen safe zones (40px safety margin
-        # compensates for font metric inaccuracies in text_size_multiline)
-        max_text_w = target_w - 2 * SAFE_SIDE - 40
+        # Safety net: if text still exceeds safe zones after pixel wrapping
+        # (can happen due to PIL vs imagetext-py measurement differences)
+        max_text_w = target_w - 2 * SAFE_SIDE
         if text_w > max_text_w:
-            original_text = ' '.join(lines)
-            current_max_chars = cfg.max_width_chars
-            while text_w > max_text_w and current_max_chars > 12:
-                current_max_chars -= 2
-                lines = textwrap.wrap(original_text, width=current_max_chars)
-                text_w, text_h = text_size_multiline(
-                    lines, actual_font_size, font,
-                    line_spacing=cfg.line_spacing,
-                    draw_emojis=True,
-                )
-            logger.info(
-                f"Re-wrapped text: {cfg.max_width_chars}->{current_max_chars} chars, "
-                f"width={text_w}px (max={max_text_w}px)"
+            logger.warning(
+                f"Text width {text_w}px exceeds safe zone {max_text_w}px, "
+                f"re-wrapping with tighter limit"
             )
+            tighter_limit = max_text_w - 60
+            lines = self._wrap_text_by_pixels(
+                ' '.join(lines), font_path, actual_font_size, tighter_limit
+            )
+            text_w, text_h = text_size_multiline(
+                lines, actual_font_size, font,
+                line_spacing=cfg.line_spacing,
+                draw_emojis=True,
+            )
+            logger.info(f"Re-wrapped: width={text_w}px (limit={tighter_limit}px)")
 
         # Calculate position based on cfg.position
         vertical, horizontal = cfg.position
@@ -740,9 +810,10 @@ class VideoComposer:
         """Render text using PIL (fallback without emoji support)."""
         draw = ImageDraw.Draw(img)
 
-        # Load font
+        # Load font with size_multiplier applied
+        actual_font_size = int(cfg.font_size * cfg.size_multiplier)
         try:
-            font = ImageFont.truetype(str(font_path), cfg.font_size)
+            font = ImageFont.truetype(str(font_path), actual_font_size)
         except Exception as e:
             logger.warning(f"Failed to load font {font_path}: {e}")
             font = ImageFont.load_default()
@@ -765,27 +836,28 @@ class VideoComposer:
         total_height = len(lines) * (line_height + cfg.line_spacing)
         max_width = max(line_widths) if line_widths else 0
 
-        # Ensure text fits within screen safe zones (40px safety margin)
-        max_text_w = target_w - 2 * SAFE_SIDE - 40
+        # Safety net: if text still exceeds safe zones after pixel wrapping
+        max_text_w = target_w - 2 * SAFE_SIDE
         if max_width > max_text_w:
-            original_text = ' '.join(lines)
-            current_max_chars = cfg.max_width_chars
-            while max_width > max_text_w and current_max_chars > 12:
-                current_max_chars -= 2
-                lines = textwrap.wrap(original_text, width=current_max_chars)
-                line_widths = []
-                line_heights = []
-                for line in lines:
-                    bbox = draw.textbbox((0, 0), line, font=font)
-                    line_widths.append(bbox[2] - bbox[0])
-                    line_heights.append(bbox[3] - bbox[1])
-                line_height = max(line_heights) if line_heights else cfg.font_size
-                total_height = len(lines) * (line_height + cfg.line_spacing)
-                max_width = max(line_widths) if line_widths else 0
-            logger.info(
-                f"PIL re-wrapped text: {cfg.max_width_chars}->{current_max_chars} chars, "
-                f"width={max_width}px (max={max_text_w}px)"
+            logger.warning(
+                f"PIL: text width {max_width}px exceeds safe zone {max_text_w}px, "
+                f"re-wrapping with tighter limit"
             )
+            tighter_limit = max_text_w - 40
+            lines = self._wrap_text_by_pixels(
+                ' '.join(lines), font_path,
+                int(cfg.font_size * cfg.size_multiplier), tighter_limit
+            )
+            line_widths = []
+            line_heights = []
+            for line in lines:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                line_widths.append(bbox[2] - bbox[0])
+                line_heights.append(bbox[3] - bbox[1])
+            line_height = max(line_heights) if line_heights else cfg.font_size
+            total_height = len(lines) * (line_height + cfg.line_spacing)
+            max_width = max(line_widths) if line_widths else 0
+            logger.info(f"PIL re-wrapped: width={max_width}px (limit={tighter_limit}px)")
 
         # Position: bottom of safe zone
         safe_zone_bottom = target_h - 340
